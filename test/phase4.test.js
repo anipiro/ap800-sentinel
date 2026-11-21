@@ -120,3 +120,40 @@ test('reports: sending goes to the mock notifier only, and the schedule sends ea
   assert.deepEqual(reportgen.runSchedule(eng, make), ['daily']);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM report_sends WHERE by_name = 'schedule'").get().n, 3);
 });
+
+// ---- 4. ask the data ----------------------------------------------------------------
+const { ask, SUPPORTED } = require('../src/ask');
+test('ask: every listed question is understood, and answers come from the records with links', () => {
+  const { db, eng, run } = rig();
+  const ctx = () => ({ model, canMoney: true, now: eng.now(), status: { status: 'ok', health: 97 } });
+  for (const q of SUPPORTED) { const r = ask(db, q, ctx()); assert.equal(r.understood, true, q); assert.ok(r.answer.length > 15, q); assert.ok(Array.isArray(r.links)); }
+  assert.ok(SUPPORTED.length >= 10);
+  assert.match(ask(db, 'Why did the last issue happen?', ctx()).answer, /No issue has been recorded/);
+  assert.match(ask(db, 'What is open right now?', ctx()).answer, /running normally, health 97 of 100\. No issues are open/);
+  run(30); eng.injectFault('jam', U.op); run(30);
+  const id = eng.active.id;
+  let r = ask(db, 'why did the last issue happen', ctx());
+  assert.equal(r.intent, 'why_last'); assert.match(r.answer, /Exit belt jammed/); assert.match(r.answer, /Belt motor current is \d+ % above normal/); assert.deepEqual(r.links, [{ label: `Issue ${id}`, href: `#issue-${id}` }]);
+  r = ask(db, 'What should we fix first?', ctx());
+  assert.equal(r.intent, 'fix_first'); assert.match(r.answer, /Fix "Exit belt jammed" first/); assert.match(r.answer, /GEL at risk/);
+  assert.match(ask(db, 'who was alerted for the last issue', ctx()).answer, /Giorgi \(technician, day shift\) \(level 1\)/);
+  eng.resolve(id, U.tech, { note: 'Cleared' }); run(30);
+  r = ask(db, 'How many unplanned stops today?', ctx());
+  assert.equal(r.intent, 'stops'); assert.match(r.answer, /^1 unplanned stop in the last 24 hours/);
+  r = ask(db, 'Which machine cost the most this week?', ctx());
+  assert.equal(r.intent, 'cost_most'); assert.match(r.answer, /one machine, Dumpling line 1/); assert.match(r.answer, /belt jam at the exit belt/); assert.match(r.answer, /in the last 7 days/);
+  assert.ok(r.links.some((l) => l.href === `#issue-${id}`));
+  assert.match(ask(db, 'how much did we lose today', ctx()).answer, /GEL lost across 1 issue/);
+  assert.match(ask(db, 'which spare parts are low', ctx()).answer, /Exit belt \(out of stock/);
+});
+test('ask: unknown questions get the supported list, money needs the manager, and nothing is written', () => {
+  const { db, eng, run } = rig(); run(20);
+  const count = () => ['issues', 'events', 'audit_log', 'actions', 'work_orders'].map((t) => db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n).join(',');
+  const before = count();
+  for (const q of ['What is the weather in Tbilisi?', '', 'asdf qwer', 'Tell me a joke']) { const r = ask(db, q, { model, now: eng.now() }); assert.equal(r.understood, false, q); assert.deepEqual(r.supported, SUPPORTED); assert.match(r.answer, /only answer the kinds of question listed/); }
+  assert.match(ask(db, 'how much did we lose this week', { model, canMoney: false, now: eng.now() }).answer, /only shown to the manager/);
+  assert.match(ask(db, 'Which machine cost the most this week?', { model, canMoney: false, now: eng.now() }).answer, /only shown to the manager/);
+  assert.ok(!/GEL/.test(ask(db, 'What are the biggest risks?', { model, canMoney: false, now: eng.now() }).answer));
+  for (const q of SUPPORTED) ask(db, q, { model, canMoney: true, now: eng.now() });
+  assert.equal(count(), before);
+});

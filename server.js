@@ -17,6 +17,7 @@ const parts = require('./src/parts');
 const audit = require('./src/audit');
 const monitor = require('./src/monitor');
 const reportgen = require('./src/reportgen');
+const asker = require('./src/ask');
 const risk = require('./src/risk');
 const { runScenario, crossCheckComparison } = require('./src/sandbox');
 
@@ -79,6 +80,7 @@ async function api(req, res, url) {
   if (p === '/api/state' && GET) { const st = engine.state(Number(q.since) || 0, user); return send(res, 200, { ...st, similar: st.active ? kb.similar(db, { type: st.active.type, title: st.active.title, excludeIssue: st.active.id }) : [], parts: st.active ? parts.forIssueType(db, st.active.type) : [], phone: { hist: phone.hist, live: Date.now() - phone.last < 5000 } }); }
   if (p === '/api/parts' && GET) return send(res, 200, parts.list(db));
   if (p === '/api/handover' && GET) return send(res, 200, parts.handover(db));
+  if (p === '/api/ask' && GET) { const m0 = engine.state(engine.seq).machine; return send(res, 200, asker.ask(db, q.q || '', { model, status: { status: m0.status, health: m0.health }, canMoney: user.role === 'manager', timeScale: engine.timeScale, target: engine.machine.target_kg_h, assumptions: engine.assumptions() })); }
   if (p === '/api/kb' && GET) return send(res, 200, kb.search(db, q.q || ''));
 
   if (p === '/api/issues' && GET) return send(res, 200, reports.issues(db));

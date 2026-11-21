@@ -590,6 +590,21 @@
     };
   }
 
+  // ---- ask the data -------------------------------------------------------------
+  const askLog = [];
+  async function viewAsk(question) {
+    const el = $('#v-ask');
+    const r = await api('api/ask?q=' + encodeURIComponent(question || ''));
+    if (question) askLog.unshift(r);
+    el.innerHTML = `<section class="panel"><div class="head"><h2>Ask about the line</h2><span class="small muted">Answers come from this app's own records. No AI service is used.</span></div>
+        <form class="row" id="askf"><input id="ask-q" placeholder="Type a question" aria-label="Your question" style="flex:1 1 260px" maxlength="300"><button class="btn go">Ask</button></form>
+        <div><span class="small muted">Questions it understands (press one, or type something similar)</span><div class="row" style="margin-top:6px">${r.supported.map((s) => `<button class="btn plain" data-ask="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>
+        <p class="note">It recognises these ${r.supported.length} kinds of question by their wording, with "today", "this week" or "last hour" for the period. Anything else gets this list back. It only reads; it cannot change anything.</p></section>
+      ${askLog.map((a) => `<section class="panel"><span class="small muted">${esc(a.question)}</span><p style="font-size:1.02rem;max-width:80ch">${a.understood ? '' : '<b>Not a question I can answer.</b> '}${esc(a.answer)}</p>${a.links.length ? `<div class="row">${a.links.map((l) => `<a class="btn plain" href="${esc(l.href)}">${esc(l.label)}</a>`).join('')}</div>` : ''}</section>`).join('')}`;
+    $('#askf').onsubmit = (e) => { e.preventDefault(); const v = $('#ask-q').value.trim(); if (v) viewAsk(v); };
+    el.onclick = (e) => { const b = e.target.closest('[data-ask]'); if (b) viewAsk(b.dataset.ask); };
+  }
+
   // ---- audit log (manager) ----------------------------------------------------
   let auditQuery = '';
   async function viewAudit() {
@@ -604,7 +619,7 @@
   }
 
   // ---- routing -------------------------------------------------------------
-  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, me: viewMe, work: viewWork, risk: viewRisk, sim: viewSim, money: viewMoney, audit: viewAudit, setup: viewSetup };
+  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, me: viewMe, work: viewWork, risk: viewRisk, sim: viewSim, money: viewMoney, ask: () => viewAsk(), audit: viewAudit, setup: viewSetup };
   function route(refreshOnly) {
     if (!ME) return;
     let h = location.hash.slice(1) || 'live', id = null;
