@@ -1,0 +1,430 @@
+<title>AP800 Sentinel</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one left-aligned working document, 1080px max; the process-line drawing is the one loud element, everything else is quiet tables and lists. */
+:root{
+  --bg:#EDF0F3;        /* brushed steel */
+  --panel:#FFFFFF;
+  --fg:#16202B;
+  --muted:#55626E;
+  --line:#C7CFD8;
+  --accent:#1D5BB8;    /* gearmotor blue */
+  --accent-soft:#DCE8F8;
+  --dough:#F3EAD0;     /* dough sheet */
+  --ok:#2B7A4B; --warn:#A8690F; --crit:#B93226;
+  --display:"Archivo","Arial Narrow",Arial,sans-serif;
+  --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#11171E; --panel:#19212B; --fg:#E5EAF0; --muted:#97A4B0; --line:#2F3B48;
+  --accent:#74A9F5; --accent-soft:#1E3352; --dough:#3A3424;
+  --ok:#5CC389; --warn:#E0A84A; --crit:#F07A6E; color-scheme:dark } }
+:root[data-theme="dark"]{
+  --bg:#11171E; --panel:#19212B; --fg:#E5EAF0; --muted:#97A4B0; --line:#2F3B48;
+  --accent:#74A9F5; --accent-soft:#1E3352; --dough:#3A3424;
+  --ok:#5CC389; --warn:#E0A84A; --crit:#F07A6E; color-scheme:dark }
+
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:16px;line-height:1.55}
+.wrap{max-width:1080px;margin:0 auto;padding-block:40px 72px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-direction:column;gap:56px}
+section{display:flex;flex-direction:column;gap:18px;min-width:0}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;line-height:1.15}
+h1{font-size:clamp(2rem,5vw,3rem);font-weight:700;letter-spacing:-0.01em}
+h2{font-size:1.55rem;font-weight:700}
+h3{font-size:1.05rem;font-weight:600}
+p{margin:0;max-width:68ch}
+.lede{font-size:1.15rem;max-width:62ch}
+.muted{color:var(--muted)}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;border-top:2px solid var(--fg);border-bottom:1px solid var(--line)}
+.facts div{padding:12px 14px 12px 0}
+.facts dt{font-size:.82rem;color:var(--muted)}
+.facts dd{margin:0;font-family:var(--display);font-weight:600;font-size:1.15rem;font-variant-numeric:tabular-nums}
+dl{margin:0}
+
+.scroll{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;min-width:720px;font-size:.92rem}
+th,td{text-align:left;vertical-align:top;padding:10px 14px;border-bottom:1px solid var(--line)}
+th{font-family:var(--display);font-weight:600;font-size:.85rem;color:var(--muted);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td:first-child{font-weight:500}
+.tier{display:inline-block;font-size:.76rem;font-weight:600;padding:1px 8px;border-radius:99px;white-space:nowrap}
+.tier.core{background:var(--accent);color:var(--panel)}
+.tier.later{background:var(--accent-soft);color:var(--fg)}
+
+figure{margin:0;display:flex;flex-direction:column;gap:10px}
+.draw{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px}
+.draw svg{display:block;width:100%;min-width:900px;height:auto;color:var(--fg);font-family:var(--body)}
+figcaption{font-size:.9rem;color:var(--muted);max-width:75ch}
+.s-box{fill:var(--dough);stroke:var(--fg);stroke-width:1.2}
+.s-sys{fill:var(--bg);stroke:var(--line);stroke-width:1}
+.s-node{fill:var(--panel);stroke:var(--fg);stroke-width:1.2}
+.s-wire{stroke:currentColor;stroke-width:1.4;fill:none}
+.s-dash{stroke:currentColor;stroke-width:1.2;fill:none;stroke-dasharray:5 4}
+.tb{font-size:13.5px;font-weight:600;fill:var(--fg)}
+.tt{font-size:12px;fill:var(--muted)}
+.ts{font-size:12px;fill:var(--fg)}
+.tl{font-size:12.5px;font-weight:600;fill:var(--muted)}
+.dot{fill:var(--accent)}
+
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:28px}
+.two > div{min-width:0;display:flex;flex-direction:column;gap:8px}
+ul,ol{margin:0;padding-left:1.2em;max-width:70ch;display:flex;flex-direction:column;gap:6px}
+
+.schema{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:12px}
+.ent{background:var(--panel);border:1px solid var(--line);border-top:3px solid var(--accent);border-radius:4px;padding:12px 14px;min-width:0}
+.ent h3{font-size:.98rem}
+.ent p{font-size:.82rem;color:var(--muted);margin:2px 0 8px}
+.ent ul{list-style:none;padding:0;gap:2px;font-size:.84rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.ent li.k{font-weight:600}
+.ent li.f{color:var(--accent)}
+
+.steps{list-style:none;padding:0;gap:0;max-width:none;counter-reset:s}
+.steps li{counter-increment:s;display:grid;grid-template-columns:2.4rem minmax(0,1fr);gap:4px 12px;padding:14px 0;border-top:1px solid var(--line)}
+.steps li::before{content:counter(s);font-family:var(--display);font-weight:700;font-size:1.4rem;color:var(--accent);grid-row:span 2;line-height:1.1}
+.steps h3{align-self:end}
+.steps p{grid-column:2}
+.ask{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--warn);border-radius:4px;padding:18px 20px}
+.ask ol{gap:10px}
+</style>
+
+<div class="wrap">
+
+<header>
+  <section>
+    <h1>AP800 Sentinel</h1>
+    <p class="lede">A fault-detection device and website for the Signal-Pack AP800 dumpling machine. This page is the plan: what the supplied files contain, where the machine can fail, what the device measures, how the software is laid out, and how the data is stored.</p>
+    <dl class="facts">
+      <div><dt>Output</dt><dd>up to 800 kg/h</dd></div>
+      <div><dt>Dough rolling</dt><dd>7 stages</dd></div>
+      <div><dt>Sheet thickness</dt><dd>0.4 to 2.0 mm</dd></div>
+      <div><dt>Product weight</dt><dd>2 to 25 g</dd></div>
+      <div><dt>Supply</dt><dd>380 V, 5.0 kW</dd></div>
+      <div><dt>Footprint with pump</dt><dd>2400 × 1651 mm</dd></div>
+    </dl>
+  </section>
+</header>
+
+<section>
+  <h2>What the files contain</h2>
+  <p>All eleven files were opened: five PDFs, four photos and two videos. Everything in Russian was read and is summarised here in English.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>File</th><th>What it is</th><th>What it gives the project</th></tr></thead>
+      <tbody>
+        <tr><td>Commercial offer, 12 pages</td><td>Sales description of the AP800, technical data, price list</td><td>The process step by step, every rated figure, and a mention of a "dough feed speed synchronisation sensor" already on the machine</td></tr>
+        <tr><td>Specification, 1 June 2023</td><td>The order: machine, SPSh400 filling pump, two drum sets, offcut return, service trolley. USD 78,114 list, 69,800 after discount</td><td>The exact configuration to monitor. Drum sets are V18Ts2 (16 to 18 g, flower edge) and V14-16 (braid edge)</td></tr>
+        <tr><td>Dimensions drawing</td><td>Side and front elevation</td><td>2400 × 1651 × 1963 mm. Dough is loaded at 1466 mm, filling at 1005 mm. Fixes camera heights and cable runs</td></tr>
+        <tr><td>Forms catalogue, 24 pages</td><td>Every drum shape and its throughput per machine model</td><td>Expected kg/h per recipe, used as the target line on the website</td></tr>
+        <tr><td>Vareniki photos, PDF and 4 images</td><td>Finished products on a ruler and on grid paper at 0.6, 0.8 and 1.0 mm dough</td><td>Reference images of a good product, about 8 cm long. Starting set for the camera model</td></tr>
+        <tr><td>Working video, 5 min 05 s</td><td>Factory demo, 1280 × 720, no sound</td><td>Every station is visible: rollers, twin drums, exit belt, offcut return, pump hose. Shows where sensors can be mounted</td></tr>
+        <tr><td>Noodle video, 59 s</td><td>Rolling section cutting noodles, with sound, and the control panel on screen</td><td>The panel is a Weintek touchscreen showing output 495 kg/h, filling 14 %, sag/tension −3 and three speed values. The only real sound sample</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="two">
+    <div>
+      <h3>What is missing</h3>
+      <ul>
+        <li>No service manual, alarm list or wiring diagram. The offer is a sales document.</li>
+        <li>The controller brand behind the Weintek panel is not stated.</li>
+        <li>No recording of the machine failing. The long video is silent, so there is less than a minute of real machine sound.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>What that means</h3>
+      <p>Nothing here can train a fault detector. The device has to record the healthy machine on site first, learn what normal looks like for each recipe, and flag departures from it. Fixed limits taken from the rated figures cover the first weeks.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>The machine, and where it is measured</h2>
+  <figure>
+    <div class="draw">
+      <svg viewBox="0 0 1100 372" role="img" aria-label="Dough moves through six stations from hopper to exit belt; the filling pump feeds the forming drums and offcuts return to the hopper. Each station carries the sensors that watch it.">
+        <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
+        <path class="s-dash" d="M815 120 V52 H95 V118" marker-end="url(#a1)"/>
+        <text class="tt" x="455" y="44" text-anchor="middle">dough offcuts return to the hopper by conveyor</text>
+
+        <rect class="s-box" x="20" y="120" width="150" height="70" rx="3"/>
+        <text class="tb" x="95" y="150" text-anchor="middle">Dough hopper</text>
+        <text class="tt" x="95" y="170" text-anchor="middle">24 L, with feeder</text>
+
+        <rect class="s-box" x="200" y="120" width="150" height="70" rx="3"/>
+        <text class="tb" x="275" y="150" text-anchor="middle">Rollers, stages 1–2</text>
+        <text class="tt" x="275" y="170" text-anchor="middle">form the first sheet</text>
+
+        <rect class="s-box" x="380" y="120" width="150" height="70" rx="3"/>
+        <text class="tb" x="455" y="150" text-anchor="middle">Two 3-roller groups</text>
+        <text class="tt" x="455" y="170" text-anchor="middle">compact and thin</text>
+
+        <rect class="s-box" x="560" y="120" width="150" height="70" rx="3"/>
+        <text class="tb" x="635" y="150" text-anchor="middle">Calibrating rollers</text>
+        <text class="tt" x="635" y="170" text-anchor="middle">final gauge, two strips</text>
+
+        <rect class="s-box" x="740" y="120" width="150" height="70" rx="3"/>
+        <text class="tb" x="815" y="150" text-anchor="middle">Forming drums</text>
+        <text class="tt" x="815" y="170" text-anchor="middle">Ø220 × 150, sprung</text>
+
+        <rect class="s-box" x="920" y="120" width="150" height="70" rx="3"/>
+        <text class="tb" x="995" y="150" text-anchor="middle">Exit belt</text>
+        <text class="tt" x="995" y="170" text-anchor="middle">finished products</text>
+
+        <path class="s-wire" d="M172 155 H197" marker-end="url(#a1)"/>
+        <path class="s-wire" d="M352 155 H377" marker-end="url(#a1)"/>
+        <path class="s-wire" d="M532 155 H557" marker-end="url(#a1)"/>
+        <path class="s-wire" d="M712 155 H737" marker-end="url(#a1)"/>
+        <path class="s-wire" d="M892 155 H917" marker-end="url(#a1)"/>
+
+        <rect class="s-box" x="740" y="296" width="150" height="60" rx="3"/>
+        <text class="tb" x="815" y="322" text-anchor="middle">Filling pump</text>
+        <text class="tt" x="815" y="341" text-anchor="middle">140 L, 0.25 MPa</text>
+        <path class="s-wire" d="M878 296 V194" marker-end="url(#a1)"/>
+        <text class="tt" x="870" y="276" text-anchor="end">filling, through slot nozzle</text>
+
+        <g>
+          <circle class="dot" cx="26" cy="210" r="4"/><text class="ts" x="36" y="214">feeder motor current</text>
+
+          <circle class="dot" cx="206" cy="210" r="4"/><text class="ts" x="216" y="214">motor current</text>
+          <circle class="dot" cx="206" cy="230" r="4"/><text class="ts" x="216" y="234">gearbox vibration</text>
+          <circle class="dot" cx="206" cy="250" r="4"/><text class="ts" x="216" y="254">gearbox temperature</text>
+
+          <circle class="dot" cx="386" cy="210" r="4"/><text class="ts" x="396" y="214">motor current</text>
+          <circle class="dot" cx="386" cy="230" r="4"/><text class="ts" x="396" y="234">camera B: tear, sag</text>
+
+          <circle class="dot" cx="566" cy="210" r="4"/><text class="ts" x="576" y="214">motor current</text>
+          <circle class="dot" cx="566" cy="230" r="4"/><text class="ts" x="576" y="234">sheet thickness</text>
+
+          <circle class="dot" cx="746" cy="210" r="4"/><text class="ts" x="756" y="214">drum vibration</text>
+          <circle class="dot" cx="746" cy="230" r="4"/><text class="ts" x="756" y="234">drive current</text>
+
+          <circle class="dot" cx="926" cy="210" r="4"/><text class="ts" x="936" y="214">camera A: count,</text>
+          <text class="ts" x="936" y="232">shape, open seams</text>
+          <circle class="dot" cx="926" cy="250" r="4"/><text class="ts" x="936" y="254">belt motor current</text>
+
+          <circle class="dot" cx="906" cy="316" r="4"/><text class="ts" x="916" y="320">pressure at outlet</text>
+          <circle class="dot" cx="906" cy="336" r="4"/><text class="ts" x="916" y="340">pump motor current</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>Dough runs left to right. Blue dots are measurement points the device adds. The dashed line is the offcut return, which is why a tear upstream shows up again as a hopper problem a minute later.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>Faults the device looks for</h2>
+  <p>This list is derived from how the machine works, not from a manufacturer fault table. It should be checked with whoever operates the machine before any hardware is ordered.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>What goes wrong</th><th>What it looks like</th><th>Caught by</th><th>How it is decided</th></tr></thead>
+      <tbody>
+        <tr><td>Dough sheet tears between stages</td><td>Gap in the sheet, downstream rollers run unloaded</td><td>Camera B, motor current</td><td>Sheet width drops to zero in the image, current falls below the loaded band</td></tr>
+        <tr><td>Hopper runs empty or dough bridges</td><td>Stage 1 starves, sheet thins and breaks</td><td>Feeder and stage 1 current</td><td>Current falls for more than a few seconds while the machine is running</td></tr>
+        <tr><td>Dough wraps around a roller</td><td>Sheet disappears downstream, load climbs</td><td>Motor current, camera B</td><td>Current rises past the learned band while the sheet is missing after that roller</td></tr>
+        <tr><td>Stages drift out of speed step</td><td>Sheet sags or is stretched tight</td><td>Camera B, controller sag value</td><td>Loop depth leaves the allowed window</td></tr>
+        <tr><td>Sheet thickness drifts</td><td>Products too heavy or too light, weak seams</td><td>Thickness sensor, camera A</td><td>Gauge leaves recipe tolerance, product area trends away from baseline</td></tr>
+        <tr><td>Filling starves or nozzle blocks</td><td>Flat, empty or half-filled products</td><td>Outlet pressure, pump current, camera A</td><td>Pressure drops from the 0.25 MPa working level, or rises sharply on a blockage</td></tr>
+        <tr><td>Drum cell clogs or a pusher sticks</td><td>One position in the row is missing or doubled, every turn</td><td>Camera A</td><td>The same lane fails at the drum's rotation interval</td></tr>
+        <tr><td>Seams open, filling leaks</td><td>Split edges, filling visible on the belt</td><td>Camera A</td><td>Shape and colour check on each product, defect rate over a rolling minute</td></tr>
+        <tr><td>Drum spring pressure lost or drums worn</td><td>Products not cut free, joined in strips</td><td>Camera A, drum vibration</td><td>Joined shapes on the belt, change in the once-per-cell vibration pattern</td></tr>
+        <tr><td>Gearbox or bearing wear, low oil</td><td>Noise, heat, eventually a seized drive</td><td>Vibration, temperature</td><td>Slow rise in vibration bands and housing temperature over days</td></tr>
+        <tr><td>Belt or offcut conveyor jams</td><td>Product piles up, offcuts spill</td><td>Camera A, belt current</td><td>Products stop moving in the image while drums still turn</td></tr>
+        <tr><td>Supply fault or overload</td><td>Trip, phase loss, drive alarm</td><td>Main power meter, controller alarms</td><td>Phase imbalance, total power outside the recipe band</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>The device</h2>
+  <p>A kit of sensors that attach without changing the machine, wired to one sealed box mounted beside it. Dumpling lines are washed down, so everything near the product is rated IP67 or better and nothing sits above open dough or filling.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Part</th><th>Where it goes</th><th>Qty</th><th>What it adds</th><th>When</th></tr></thead>
+      <tbody>
+        <tr><td>Camera A with ring light</td><td>Above the exit belt, looking down</td><td>1</td><td>Counts and inspects every product. The pale product on a blue belt is easy to separate</td><td><span class="tier core">Core</span></td></tr>
+        <tr><td>Clamp-on current sensors</td><td>Inside the cabinet, one per motor feed</td><td>6 to 7</td><td>Load on every drive and the pump, with no contact with the machine</td><td><span class="tier core">Core</span></td></tr>
+        <tr><td>Vibration and temperature sensors</td><td>Rolling gearbox, drum drive, pump</td><td>3</td><td>Mechanical wear, weeks before failure</td><td><span class="tier core">Core</span></td></tr>
+        <tr><td>Edge box</td><td>Stainless enclosure beside the control cabinet</td><td>1</td><td>Small industrial computer, sensor inputs, network link, buffer</td><td><span class="tier core">Core</span></td></tr>
+        <tr><td>Stack light and buzzer</td><td>On top of the edge box</td><td>1</td><td>Local alarm that works with no internet</td><td><span class="tier core">Core</span></td></tr>
+        <tr><td>Link to the machine controller</td><td>Ethernet to the Weintek panel</td><td>1</td><td>Recipe, speeds, setpoints and the machine's own alarms, read-only</td><td><span class="tier later">Phase 2</span></td></tr>
+        <tr><td>Camera B</td><td>Side view of the dough sheet between roller groups</td><td>1</td><td>Tears and sag</td><td><span class="tier later">Phase 2</span></td></tr>
+        <tr><td>Hygienic pressure sensor</td><td>Tee at the pump outlet</td><td>1</td><td>Direct view of filling flow. Touches product, so needs a food-grade fitting</td><td><span class="tier later">Phase 2</span></td></tr>
+        <tr><td>Sheet thickness sensor</td><td>After the calibrating rollers</td><td>1</td><td>Gauge to a tenth of a millimetre</td><td><span class="tier later">Phase 2</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="muted">Hardware for the core kit is roughly USD 6,000 to 9,000 at industrial grade. This is an estimate to be priced properly after the site survey.</p>
+</section>
+
+<section>
+  <h2>System architecture</h2>
+  <figure>
+    <div class="draw">
+      <svg viewBox="0 0 1100 582" role="img" aria-label="Four layers: the machine and its sensors feed an edge box, which sends summarised data to a server, which serves the website and sends alerts.">
+        <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
+
+        <rect class="s-sys" x="10" y="10" width="1080" height="90" rx="4"/>
+        <text class="tl" x="30" y="28">At the machine</text>
+        <rect class="s-node" x="30" y="36" width="330" height="54" rx="3"/>
+        <text class="tb" x="195" y="59" text-anchor="middle">Machine controller and Weintek panel</text>
+        <text class="tt" x="195" y="77" text-anchor="middle">state, speeds, setpoints, alarms</text>
+        <rect class="s-node" x="385" y="36" width="330" height="54" rx="3"/>
+        <text class="tb" x="550" y="59" text-anchor="middle">Retrofit sensors</text>
+        <text class="tt" x="550" y="77" text-anchor="middle">current, vibration, temperature, pressure</text>
+        <rect class="s-node" x="740" y="36" width="330" height="54" rx="3"/>
+        <text class="tb" x="905" y="59" text-anchor="middle">Two cameras</text>
+        <text class="tt" x="905" y="77" text-anchor="middle">exit belt and dough sheet</text>
+
+        <path class="s-wire" d="M195 100 V157" marker-end="url(#a2)"/><text class="tt" x="204" y="134">Modbus TCP or MQTT, read-only</text>
+        <path class="s-wire" d="M550 100 V157" marker-end="url(#a2)"/><text class="tt" x="559" y="134">IO-Link and 4–20 mA</text>
+        <path class="s-wire" d="M905 100 V157" marker-end="url(#a2)"/><text class="tt" x="914" y="134">Ethernet video</text>
+
+        <rect class="s-sys" x="10" y="160" width="1080" height="90" rx="4"/>
+        <text class="tl" x="30" y="178">Edge box, beside the machine</text>
+        <rect class="s-node" x="30" y="186" width="245" height="54" rx="3"/>
+        <text class="tb" x="152" y="209" text-anchor="middle">Collectors</text>
+        <text class="tt" x="152" y="227" text-anchor="middle">one per source, time-stamped</text>
+        <rect class="s-node" x="295" y="186" width="245" height="54" rx="3"/>
+        <text class="tb" x="417" y="209" text-anchor="middle">Signal features</text>
+        <text class="tt" x="417" y="227" text-anchor="middle">levels and spectra, each second</text>
+        <rect class="s-node" x="560" y="186" width="245" height="54" rx="3"/>
+        <text class="tb" x="682" y="209" text-anchor="middle">Vision</text>
+        <text class="tt" x="682" y="227" text-anchor="middle">count, shape, seam per row</text>
+        <rect class="s-node" x="825" y="186" width="245" height="54" rx="3"/>
+        <text class="tb" x="947" y="209" text-anchor="middle">Local rules and buffer</text>
+        <text class="tt" x="947" y="227" text-anchor="middle">keeps working offline</text>
+
+        <path class="s-wire" d="M947 250 V267" marker-end="url(#a2)"/>
+        <rect class="s-node" x="825" y="270" width="245" height="40" rx="3"/>
+        <text class="tb" x="947" y="295" text-anchor="middle">Stack light and buzzer</text>
+
+        <path class="s-wire" d="M550 250 V327" marker-end="url(#a2)"/>
+        <text class="tt" x="540" y="286" text-anchor="end">MQTT over TLS</text>
+        <text class="tt" x="540" y="302" text-anchor="end">features, events, short clips</text>
+
+        <rect class="s-sys" x="10" y="330" width="1080" height="90" rx="4"/>
+        <text class="tl" x="30" y="348">Server</text>
+        <rect class="s-node" x="30" y="356" width="245" height="54" rx="3"/>
+        <text class="tb" x="152" y="379" text-anchor="middle">Ingest</text>
+        <text class="tt" x="152" y="397" text-anchor="middle">checks and stores</text>
+        <rect class="s-node" x="295" y="356" width="245" height="54" rx="3"/>
+        <text class="tb" x="417" y="379" text-anchor="middle">Database</text>
+        <text class="tt" x="417" y="397" text-anchor="middle">Postgres with time-series tables</text>
+        <rect class="s-node" x="560" y="356" width="245" height="54" rx="3"/>
+        <text class="tb" x="682" y="379" text-anchor="middle">Detection engine</text>
+        <text class="tt" x="682" y="397" text-anchor="middle">rules, baselines, models</text>
+        <rect class="s-node" x="825" y="356" width="245" height="54" rx="3"/>
+        <text class="tb" x="947" y="379" text-anchor="middle">Alert service</text>
+        <text class="tt" x="947" y="397" text-anchor="middle">groups, routes, escalates</text>
+        <path class="s-wire" d="M277 383 H292" marker-end="url(#a2)"/>
+        <path class="s-wire" d="M542 383 H557" marker-end="url(#a2)"/>
+        <path class="s-wire" d="M807 383 H822" marker-end="url(#a2)"/>
+
+        <path class="s-wire" d="M417 420 V477" marker-end="url(#a2)"/><text class="tt" x="426" y="454">live readings and history</text>
+        <path class="s-wire" d="M947 420 V477" marker-end="url(#a2)"/><text class="tt" x="938" y="454" text-anchor="end">incident, within seconds</text>
+
+        <rect class="s-sys" x="10" y="480" width="1080" height="90" rx="4"/>
+        <text class="tl" x="30" y="498">People</text>
+        <rect class="s-node" x="30" y="506" width="775" height="54" rx="3"/>
+        <text class="tb" x="417" y="529" text-anchor="middle">Website</text>
+        <text class="tt" x="417" y="547" text-anchor="middle">line view, incidents, trends, product quality, maintenance, settings</text>
+        <rect class="s-node" x="825" y="506" width="245" height="54" rx="3"/>
+        <text class="tb" x="947" y="529" text-anchor="middle">Phone alerts</text>
+        <text class="tt" x="947" y="547" text-anchor="middle">Telegram, SMS, email</text>
+      </svg>
+    </div>
+    <figcaption>Raw vibration and video stay in the edge box. Only one-second summaries, events and short clips around an incident leave the factory, which keeps the link small and the site private.</figcaption>
+  </figure>
+
+  <div class="two">
+    <div>
+      <h3>How a fault is decided</h3>
+      <ol>
+        <li>Fixed limits from the rated figures and the recipe. Live from day one.</li>
+        <li>Learned bands per recipe, from two to four weeks of normal running.</li>
+        <li>Models that combine signals: an anomaly score for the drives, a defect classifier for the camera.</li>
+        <li>One incident per cause, with the evidence, the likely reason and what to check. Operators mark each one real or false, and that feedback retrains the bands.</li>
+      </ol>
+    </div>
+    <div>
+      <h3>Technology</h3>
+      <ul>
+        <li>Edge box: Python services in Docker, OpenCV and ONNX for vision, a local MQTT broker, a disk buffer.</li>
+        <li>Server: Next.js and TypeScript for the site and its API, Postgres with TimescaleDB, object storage for clips.</li>
+        <li>Live updates to the browser by server-sent events.</li>
+        <li>Hosting: cloud by default. The same stack runs on one on-site server if the plant does not allow outside connections.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Data schema</h2>
+  <p>The chain is machine, component, sensor, reading. A run ties readings and camera results to the recipe in use. Rules and baselines produce incidents, and incidents produce notifications. Fields in blue link to another table.</p>
+  <div class="schema">
+    <div class="ent"><h3>machine</h3><p>One row per AP800</p><ul><li class="k">id</li><li>name, model, serial</li><li>site, timezone</li><li>commissioned_at</li></ul></div>
+    <div class="ent"><h3>component</h3><p>A station or drive on the machine</p><ul><li class="k">id</li><li class="f">machine_id</li><li>name</li><li>kind: hopper, roller_stage, drum, pump, conveyor, drive</li><li>position in line</li></ul></div>
+    <div class="ent"><h3>sensor</h3><p>One measurement channel</p><ul><li class="k">id</li><li class="f">component_id</li><li>kind, unit</li><li>sample_rate_hz</li><li>status, last_seen_at</li></ul></div>
+    <div class="ent"><h3>recipe</h3><p>What the machine is set up to make</p><ul><li class="k">id</li><li class="f">machine_id</li><li>form_code, e.g. V18Ts2</li><li>product_weight_g</li><li>dough_thickness_mm</li><li>filling_pct, target_kg_h</li></ul></div>
+    <div class="ent"><h3>run</h3><p>One stretch of production</p><ul><li class="k">id</li><li class="f">machine_id, recipe_id</li><li>started_at, ended_at</li><li>operator</li><li>kg_produced</li></ul></div>
+    <div class="ent"><h3>reading</h3><p>Time-series, one row per second per feature</p><ul><li class="k">time, sensor_id, feature</li><li class="f">run_id</li><li>value</li><li>feature: rms, peak, band_1 … band_n, mean</li></ul></div>
+    <div class="ent"><h3>inspection</h3><p>Camera result per second</p><ul><li class="k">time, sensor_id</li><li class="f">run_id</li><li>product_count, ok_count</li><li>defects: open_seam, leak, joined, missing, misshapen</li><li>mean_area_mm2</li><li>snapshot_url</li></ul></div>
+    <div class="ent"><h3>baseline</h3><p>What normal looks like</p><ul><li class="k">id</li><li class="f">sensor_id, recipe_id</li><li>feature</li><li>mean, std, low, high</li><li>trained_from, trained_to</li></ul></div>
+    <div class="ent"><h3>rule</h3><p>A fixed or learned check</p><ul><li class="k">id</li><li class="f">component_id</li><li>name, condition</li><li>severity: info, warning, critical</li><li>hold_seconds, enabled</li></ul></div>
+    <div class="ent"><h3>incident</h3><p>One detected problem</p><ul><li class="k">id</li><li class="f">machine_id, component_id, run_id, rule_id</li><li>severity, status</li><li>opened_at, closed_at</li><li>probable_cause, evidence</li><li>acknowledged_by</li><li>verdict: real, false_alarm</li></ul></div>
+    <div class="ent"><h3>notification</h3><p>A message sent about an incident</p><ul><li class="k">id</li><li class="f">incident_id, user_id</li><li>channel</li><li>sent_at, delivered</li></ul></div>
+    <div class="ent"><h3>maintenance_task</h3><p>Scheduled service work</p><ul><li class="k">id</li><li class="f">component_id</li><li>title, interval_hours</li><li>last_done_at, due_at</li><li>done_by</li></ul></div>
+    <div class="ent"><h3>user</h3><p>Who sees what and who is called</p><ul><li class="k">id</li><li>name</li><li>role: operator, technician, manager, admin</li><li>phone, telegram_id</li></ul></div>
+  </div>
+</section>
+
+<section>
+  <h2>The website</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Page</th><th>What it shows</th><th>Who uses it</th></tr></thead>
+      <tbody>
+        <tr><td>Line view</td><td>The machine drawn as its six stations, each coloured by health. Current recipe, output against target, open incidents</td><td>Operator, on a screen at the line</td></tr>
+        <tr><td>Incidents</td><td>Each problem with its chart, camera snapshot, likely cause and what to check. Acknowledge, close, mark real or false</td><td>Operator, technician</td></tr>
+        <tr><td>Trends</td><td>Any signal over hours or weeks against its learned band</td><td>Technician</td></tr>
+        <tr><td>Product quality</td><td>Count, defect rate by type, sample images, size drift</td><td>Shift manager, quality</td></tr>
+        <tr><td>Maintenance</td><td>Running hours per component, tasks due, service history</td><td>Technician</td></tr>
+        <tr><td>Devices</td><td>Every sensor and camera, when it last reported, edge box health</td><td>Admin</td></tr>
+        <tr><td>Settings</td><td>Rules and limits, recipes, people and who gets which alert</td><td>Admin</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Build order</h2>
+  <ol class="steps">
+    <li><h3>Site survey</h3><p>Identify the controller and panel model, photograph the cabinet, choose mounting points, and confirm the fault list with the operators. About a week.</p></li>
+    <li><h3>Website on a simulated machine</h3><p>Build the full site and data pipeline against a simulator that produces realistic AP800 signals and injects each fault from the table. This gives a working product to review before any hardware is bought.</p></li>
+    <li><h3>Core kit on the real machine</h3><p>Install current sensors, three vibration sensors, camera A and the edge box. Fixed limits go live. Record normal running for each recipe.</p></li>
+    <li><h3>Learned detection</h3><p>Switch on learned bands and the camera defect model. Add the controller link, camera B, pressure and thickness sensors.</p></li>
+    <li><h3>Prediction and reports</h3><p>Wear trends, service forecasts, shift and weekly reports, further machines.</p></li>
+  </ol>
+</section>
+
+<section>
+  <div class="ask">
+    <h2>Decisions needed before building</h2>
+    <ol>
+      <li>Is the machine installed and running, and can we get to it and its electrical cabinet? The files are a quotation, so this is not clear.</li>
+      <li>Start with the simulated machine, or go straight to hardware? Recommended: simulator first.</li>
+      <li>Which matters most: bad products, stoppages, or breakdowns? This sets which sensors come first.</li>
+      <li>May data leave the factory, or must the server sit on site?</li>
+      <li>Will Signal-Pack share the controller's data points? Without them the link to the panel takes longer, and the rest still works.</li>
+      <li>Hardware budget, and whether industrial-grade parts are required or a cheaper prototype is acceptable for the first trial.</li>
+    </ol>
+  </div>
+</section>
+
+</div>

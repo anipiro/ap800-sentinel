@@ -1,0 +1,13 @@
+{
+  "name": "ap800-sentinel",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Fault-detection and monitoring for the Signal-Pack AP800 dumpling machine",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "train": "node --disable-warning=ExperimentalWarning scripts/train.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/",
+    "reset": "node -e \"require('fs').rmSync('data',{recursive:true,force:true})\""
+  },
+  "engines": { "node": ">=22.13" }
+}

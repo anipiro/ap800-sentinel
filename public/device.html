@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AP800 Sentinel phone sensor</title>
+<style>
+:root{--bg:#EDF0F3;--panel:#FFFFFF;--fg:#16202B;--muted:#55626E;--line:#C7CFD8;--accent:#1D5BB8;--crit:#B93226}
+@media (prefers-color-scheme: dark){:root{--bg:#11171E;--panel:#19212B;--fg:#E5EAF0;--muted:#97A4B0;--line:#2F3B48;--accent:#74A9F5;--crit:#F07A6E;color-scheme:dark}}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:"Segoe UI",system-ui,sans-serif;font-size:17px;line-height:1.45}
+main{max-width:480px;margin:0 auto;padding:28px 18px;display:flex;flex-direction:column;gap:18px}
+h1{font-size:1.4rem;margin:0}
+p{margin:0}
+.muted{color:var(--muted);font-size:.92rem}
+button{font:inherit;font-weight:600;padding:14px;border-radius:6px;border:0;background:var(--accent);color:var(--panel)}
+button[aria-pressed="true"]{background:var(--fg)}
+.read{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:18px;display:flex;flex-direction:column;gap:4px}
+.big{font-size:2.6rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+#msg.err{color:var(--crit)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Phone sensor</h1>
+  <p class="muted">Fix the phone firmly to the machine housing, then start. It sends one vibration reading per second to the dashboard.</p>
+  <button id="go" aria-pressed="false">Start sending</button>
+  <div class="read">
+    <span class="muted">Vibration, last second</span>
+    <span class="big"><span id="rms">0.00</span> m/s²</span>
+    <span class="muted">Peak <span id="peak">0.00</span> m/s²</span>
+  </div>
+  <p id="msg" class="muted">Not sending.</p>
+</main>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  let buf = [], timer = null, sent = 0;
+  const onMotion = (e) => {
+    const a = e.acceleration;
+    if (a && a.x !== null) buf.push(Math.hypot(a.x, a.y, a.z));
+    else { const g = e.accelerationIncludingGravity; if (g && g.x !== null) buf.push(Math.abs(Math.hypot(g.x, g.y, g.z) - 9.81)); }
+  };
+  const say = (t, err) => { $('#msg').textContent = t; $('#msg').className = err ? 'err' : 'muted'; };
+  async function start() {
+    if (!window.isSecureContext) { say('This phone only shares motion data over HTTPS. Open the dashboard through an HTTPS address, for example a tunnel.', true); return; }
+    try {
+      if (window.DeviceMotionEvent && DeviceMotionEvent.requestPermission) {
+        if ((await DeviceMotionEvent.requestPermission()) !== 'granted') { say('Motion access was refused. Allow it in the browser settings and try again.', true); return; }
+      }
+    } catch (e) { say('Could not ask for motion access: ' + e.message, true); return; }
+    window.addEventListener('devicemotion', onMotion);
+    try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch (e) { /* screen may sleep */ }
+    $('#go').textContent = 'Stop sending'; $('#go').setAttribute('aria-pressed', 'true');
+    timer = setInterval(async () => {
+      if (!buf.length) { say('No motion data yet. This device may not have an accelerometer.', true); return; }
+      const rms = Math.sqrt(buf.reduce((p, c) => p + c * c, 0) / buf.length), peak = Math.max(...buf); buf = [];
+      $('#rms').textContent = rms.toFixed(2); $('#peak').textContent = peak.toFixed(2);
+      try {
+        const r = await fetch('api/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device: 'phone', vib_rms: rms, vib_peak: peak }) });
+        if (!r.ok) throw new Error('server answered ' + r.status);
+        say('Sending. ' + (++sent) + ' readings delivered.');
+      } catch (e) { say('Reading not delivered: ' + e.message, true); }
+    }, 1000);
+  }
+  function stop() {
+    clearInterval(timer); timer = null; window.removeEventListener('devicemotion', onMotion);
+    $('#go').textContent = 'Start sending'; $('#go').setAttribute('aria-pressed', 'false'); say('Not sending.');
+  }
+  $('#go').addEventListener('click', () => (timer ? stop() : start()));
+})();
+</script>
+</body>
+</html>
