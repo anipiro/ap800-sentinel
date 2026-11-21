@@ -13,7 +13,7 @@ Open http://localhost:4800 and choose a person to sign in as. Needs Node 22.13 o
 | Command | What it does |
 |---|---|
 | `npm start` | Runs the website, the simulated machine and the detection engine |
-| `npm test` | Runs the test suite (41 tests) |
+| `npm test` | Runs the test suite (51 tests) |
 | `npm run train` | Retrains the detection model on fresh synthetic data. Restart the server afterwards |
 | `npm run reset` | Deletes the database so the next start is clean |
 
@@ -67,6 +67,12 @@ Model metrics are measured on synthetic test data from the same simulator. They 
   - A diagnosis that rests on one sensor while the rest look normal has its confidence lowered and says so. A machine action on a low-confidence diagnosis always needs manager approval and carries a warning. The warning is lifted when other sensors come to agree.
   - Every sensor flag is sent to the technician on duty.
   - The Simulator tab has a before/after table for the five untrained scenarios. After the cross-check: drop-out is correctly shown as a possible sensor fault; a frozen sensor is still missed by the fault model but the technician is now alerted; drift and performance drop are still named wrongly, at lowered confidence and with the machine action held back; a surge is unchanged.
+- **Cross-check, round 2** (still no retraining):
+  - *Corroboration.* A flagged sensor only turns a diagnosis into a possible sensor fault if no trusted sensor moves the way the fault predicts. If others agree, the fault and its actions stay and the flag is shown as a sensor note. A real blockage at maximum speed and severity stays a blockage.
+  - *Unknown-anomaly threshold.* Below a confidence threshold (Setup page, default 40 %, manager-only, audit-logged) no fault is named: the issue is "Unclassified anomaly: inspect the machine" with the top candidate listed as most likely, an inspection work order, a technician alert, and no machine action. It is named later if confidence reaches the threshold.
+  - *Warning heeded or ignored.* Where a low-confidence warning decides the outcome, the simulator runs both and shows both losses.
+  - *Data gaps* are detected between any two readings, not only after a restart.
+  - The Simulator tab compares all thirteen scenarios across three columns: before the cross-check, after round 1, after round 2.
 - **Risk tab**: Monte Carlo projection for 7, 30 and 90 days (2,000 random futures), risk ranking, heatmap and loss distribution. Event rates are placeholders that blend with recorded issue history.
 - **Unusual activity**: frozen sensor, physically impossible readings (outside the sensor range, or changing faster than the quantity can), energy use while stopped, running outside 06:00 to 22:00, a safeguard switched off, three or more rejected or undone actions in a day, a gap in the data. Each flag can be marked expected, investigated or escalated. Every check has a test button on the Risk tab except the data gap, which appears after a server restart, and the safeguard change, which you trigger on the Setup page. Out-of-range readings are hidden from the fault model. Escalated flags land in the manager's inbox on the Live tab.
 - **Assumptions**: event rates, minutes to breakdown, the early-catch rate and bearing age are editable by the manager on the Setup page and labelled "assumed" on the Risk tab.

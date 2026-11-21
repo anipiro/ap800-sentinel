@@ -142,14 +142,16 @@
       if (activeSig !== 'none') { activeSig = 'none'; box.innerHTML = `<p class="empty">${state.machine.stopped ? 'The machine is stopped. Undo the stop on the last issue to restart it.' : 'No active issue. When the model detects a problem it appears here with the reason, the people alerted and the actions taken.'}</p>`; }
       return;
     }
-    const sig = JSON.stringify([a.id, a.title, a.low, a.severity, a.acked, a.level, state.actions.map((x) => x.status + x.warn), ME.role, state.machine.stopped]);
+    const sig = JSON.stringify([a.id, a.title, a.low, a.note, a.sensorNote, a.severity, a.acked, a.level, state.actions.map((x) => x.status + x.warn), ME.role, state.machine.stopped]);
     if (sig !== activeSig) {
       activeSig = sig;
       box.innerHTML = `<div class="issue ${a.severity}">
         <div class="head"><h3>${esc(a.title)}</h3><span class="sev ${a.severity}">${a.severity}</span></div>
         <span class="small muted">${esc(a.label)}, model confidence ${Math.round(a.confidence * 100)} %, detected ${clock(a.detectedAt)}</span>
         ${a.original ? `<p class="small"><b>If the sensor is correct:</b> ${esc(a.original.title)} (${Math.round(a.original.confidence * 100)} % model confidence). No machine action is recommended until the sensor has been checked.</p>` : ''}
+        ${a.candidate ? `<p class="small"><b>Most likely, low confidence:</b> ${esc(a.candidate.title)} (${Math.round(a.candidate.confidence * 100)} %). No machine action is recommended; inspect the machine first.</p>` : ''}
         ${a.note ? `<p class="warnline">${esc(a.note)}</p>` : ''}
+        ${a.sensorNote ? `<p class="small"><b>Sensor note:</b> ${esc(a.sensorNote)}</p>` : ''}
         <p class="small">${esc(a.cause)}</p>
         <div><span class="small muted">Why the model flagged it</span><ul class="list" id="a-why"></ul></div>
         <div><span class="small muted">What to check</span><ul class="list">${a.check.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></div>
@@ -269,6 +271,8 @@
       <div class="half"><section class="panel"><h2>What was detected and why</h2><p>${esc(ex.summary)}</p>
           <ul class="list">${(ex.contributions || []).map((c) => `<li>${esc(c.text)}</li>`).join('')}</ul>
           ${ex.original ? `<p><b>If the sensor is correct:</b> ${esc(ex.original.title)} (${esc(ex.original.label)}, ${Math.round(ex.original.confidence * 100)} % model confidence). The ${esc(ex.sensor.label.toLowerCase())} sensor ${esc(ex.sensor.why)}, so no machine action was recommended.</p>` : ''}
+          ${ex.candidate ? `<p><b>Most likely, low confidence:</b> ${esc(ex.candidate.title)} (${esc(ex.candidate.label)}, ${Math.round(ex.candidate.confidence * 100)} %). No machine action was recommended.</p>` : ''}
+          ${ex.sensor_note ? `<p><b>Sensor note:</b> ${esc(ex.sensor_note)}</p>` : ''}
           ${ex.confidence_note ? `<p class="warnline">${esc(ex.confidence_note)}</p>` : ''}${ex.confirmed ? `<p class="small">${esc(ex.confirmed)}</p>` : ''}
           <p class="small muted">Anomaly score ${ex.score} against a threshold of ${ex.threshold}. Largest deviation ${ex.max_deviation} standard deviations. Pattern match with "${esc(i.label)}": ${Math.round((ex.type_similarity || 0) * 100)} %.</p>
           <p><b>Recommended:</b> ${esc(i.recommended)}</p>${i.resolution ? `<p><b>Resolution:</b> ${esc(i.resolution)} (${esc(i.resolved_by)})</p>` : ''}</section>
@@ -330,6 +334,7 @@
     const sw = [['automation_enabled', 'Automation', 'When off, nothing runs by itself. Every action waits for a person.'], ['approval_stop_feed', 'Stopping the feed needs manager approval', ''], ['approval_safe_shutdown', 'Shutting the machine down needs manager approval', '']];
     $('#v-setup').innerHTML = `<div class="half"><section class="panel"><h2>Automation and safety</h2>
           ${sw.map(([k, l, h]) => `<div class="switch"><span><b>${l}</b>${h ? `<br><span class="small muted">${h}</span>` : ''}</span><button class="btn" data-key="${k}" data-on="${s.settings[k] ? 1 : 0}" aria-pressed="${s.settings[k]}">${s.settings[k] ? 'On' : 'Off'}</button></div>`).join('')}
+          <form class="switch" id="tf"><label for="th-value" style="flex:1"><b>Name a fault only above this confidence</b><br><span class="small muted">Below it, the issue is shown as "Unclassified anomaly: inspect the machine" with the top candidate listed, and no machine action is recommended.</span></label><span class="row"><input id="th-value" name="pct" type="number" min="0" max="100" step="1" value="${Math.round(s.unknownThreshold * 100)}" style="width:5.5em"> %<button class="btn">Save</button></span></form>
           <p class="note">There is no control link to the AP800. Machine commands go to a mock that records them and stops the simulated machine.</p><p class="err"></p></section>
         <section class="panel"><h2>Who is called</h2>${table(['Level', 'Person', 'Role', 'Shift'], s.chain.map((r) => `<tr><td>${r.level}</td><td>${esc(r.name)}</td><td>${r.role}</td><td>${r.shift}</td></tr>`))}
           <p class="note">Level 1 is alerted first, by whoever is on shift (day is 08:00 to 20:00). If nobody acknowledges within ${s.escalateAfterS} s the next level is alerted. Telegram messages are recorded but not sent: no bot token is configured.</p></section></div>
@@ -341,6 +346,7 @@
       <section class="panel"><h2>Detection model</h2><dl class="kv"><div><dt>Version</dt><dd>${MODEL.version}</dd></div><div><dt>Trained</dt><dd style="font-size:.9rem">${stamp(Date.parse(MODEL.trained_at))}</dd></div><div><dt>Precision</dt><dd>${(m.precision * 100).toFixed(1)} %</dd></div><div><dt>Recall</dt><dd>${(m.recall * 100).toFixed(1)} %</dd></div><div><dt>False-positive rate</dt><dd>${(m.false_positive_rate * 100).toFixed(2)} %</dd></div><div><dt>Fault type named correctly</dt><dd>${(m.type_accuracy * 100).toFixed(1)} %</dd></div></dl>
         <p class="note">Isolation Forest plus a deviation check, then a nearest-pattern classifier. Measured on ${m.test_samples} synthetic test samples from the simulator, not on a real machine. Forest alone: recall ${(m.forest_only.recall * 100).toFixed(1)} %. Retrain with <code>npm run train</code>.</p></section>
       <section class="panel"><h2>Audit log</h2>${table(['Time', 'Person', 'Action', 'Detail'], s.audit.map((a) => `<tr><td>${stamp(a.ts)}</td><td>${esc(a.name || '')}</td><td>${a.action.replace(/_/g, ' ')}</td><td class="small">${esc(a.detail || '')}</td></tr>`))}</section>`;
+    $('#tf').onsubmit = (e) => { e.preventDefault(); act(e.target.querySelector('button'), 'api/threshold', { value: Number($('#th-value').value) / 100 }); };
     $('#af').onsubmit = (e) => { e.preventDefault(); const body = { rates_30d: {}, ttf_min: {} }; for (const [k, v] of new FormData(e.target)) { const [g, key] = k.split(':'); if (g === 'rate') body.rates_30d[key] = v; else if (g === 'ttf') body.ttf_min[key] = v; else body[k] = v; } act(e.target.querySelector('button'), 'api/assumptions', body); };
     $('#v-setup').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) act(b, 'api/settings', { key: b.dataset.key, value: b.dataset.on !== '1' }); };
   }
@@ -421,17 +427,24 @@
 
   // ---- failure scenario simulator (sandbox) ----------------------------------
   let simResult = null, simVariant = 'early';
-  const OUTCOME = { correct: 'Handled correctly', sensor: 'Flagged as a possible sensor fault', sensor_wrong: 'Wrongly blamed on a sensor', unknown: 'Seen, but not understood', misnamed: 'Wrong diagnosis', missed: 'Missed by the fault model' };
+  const OUTCOME_OLD = { correct: 'Handled correctly', sensor: 'Flagged as a possible sensor fault', unknown: 'Seen, but not understood', misnamed: 'Wrong diagnosis', missed: 'Missed by the fault model' };
+  const OUTCOME = { correct: 'Handled correctly', sensor: 'Flagged as a possible sensor fault', sensor_wrong: 'Wrongly blamed on a sensor', unknown: 'Unclassified anomaly, sent for inspection', misnamed: 'Wrong diagnosis', missed: 'Missed by the fault model' };
+  // one entry per way the scenario was run; a low-confidence warning adds an "ignored" twin
+  const simVariants = (r) => { const ig = r.ignored || {}; return [
+    ['early', r.early, 'Caught early' + (ig.early ? ', warning heeded' : '')], ...(ig.early ? [['earlyIgnored', ig.early, 'Caught early, warning ignored']] : []),
+    ['late', r.late, 'Caught late' + (ig.late ? ', warning heeded' : '')], ...(ig.late ? [['lateIgnored', ig.late, 'Caught late, warning ignored']] : []),
+    ['never', r.never, 'Nobody acts']]; };
   function renderSim() {
     const box = $('#sim-out'); if (!box) return;
     if (!simResult) { box.innerHTML = '<p class="empty">Choose a scenario and run it. The run happens in a sandbox: it cannot alert real people, stop the machine or appear in the real history.</p>'; return; }
-    const r = simResult, names = { early: 'Caught early', late: 'Caught late', never: 'Nobody acts' }, v = r[simVariant], e = r.early;
+    const r = simResult, vars = simVariants(r), names = Object.fromEntries(vars.map(([k, , n]) => [k, n])), v = (vars.find(([k]) => k === simVariant) || vars[0])[1], e = r.early;
     box.innerHTML = `<div class="head"><h2>Run ${r.id}: ${esc(r.scenario)}</h2><span class="simtag">SIMULATED, not real data</span></div>
       <p class="small muted">${r.trained ? 'The model was trained on this fault.' : 'The model was <b>not trained</b> on this scenario.'}${r.truth ? ' What is really happening: ' + esc(r.truth) : ''}</p>
       <div class="verdict ${v.outcome}"><b>${OUTCOME[v.outcome]}</b><span>${esc(v.handling)}</span></div>
-      ${r.before ? `<div class="verdict before"><b>Before cross-check: ${OUTCOME[r.before.outcome]}</b><span>${esc(r.before.text)}</span></div>` : ''}
+      ${r.round1 ? `<div class="verdict before"><b>After round 1: ${OUTCOME_OLD[r.round1.outcome]}</b><span>${esc(r.round1.text)}</span></div>` : ''}${r.before ? `<div class="verdict before"><b>Before cross-check: ${OUTCOME_OLD[r.before.outcome]}</b><span>${esc(r.before.text)}</span></div>` : ''}
       <p>${v.detected ? `An issue was raised <b>${v.detectMin} min</b> after it started, shown as "${esc(v.title)}" (${v.severity}), ${Math.round(v.confidence * 100)} % confidence.${v.original ? ` If the sensor is correct: ${esc(v.original.title)}.` : ''}` : '<b>The fault model raised no issue.</b>'}</p>
-      <div class="three">${['early', 'late', 'never'].map((k) => `<button class="variant" data-variant="${k}" aria-pressed="${k === simVariant}"><span class="small muted">${names[k]}${r[k].delayMin !== null && r[k].delayMin !== undefined ? `, response after ${r[k].delayMin} min` : ''}</span><b>${money(r[k].loss)}</b><span class="small">${esc(r[k].note)}</span></button>`).join('')}</div>
+      <div class="three">${vars.map(([k, x, n]) => `<button class="variant" data-variant="${k}" aria-pressed="${k === simVariant}"><span class="small muted">${n}${x.delayMin !== null && x.delayMin !== undefined ? `, response after ${x.delayMin} min` : ''}</span><b>${money(x.loss)}</b><span class="small">${esc(x.note)}${x.warned ? (x.ignoreWarning ? ' The manager approves the machine action despite the low-confidence warning.' : ' The manager heeds the low-confidence warning and does not approve the machine action.') : ''}</span></button>`).join('')}</div>
+      ${(r.ignored || {}).early || (r.ignored || {}).late ? '<p class="note">A machine action in this scenario carried a low-confidence warning. Both outcomes are shown: the manager heeding it and the manager approving anyway.</p>' : ''}
       <div class="half"><div><h3>Who would be alerted (${names[simVariant].toLowerCase()})</h3>${table(['Minute', 'Person', 'Channel', 'Level'], v.notified.map((n) => `<tr><td class="num">${Math.floor(n.m)}</td><td>${esc(n.name)}</td><td>${n.channel.replace('_', '-')}</td><td>${n.level}</td></tr>`))}</div>
         <div><h3>What the system would do</h3>${table(['Action', 'Outcome'], v.actions.map((a) => `<tr><td>${esc(a.label)}</td><td>${a.status === 'done' ? (a.risk === 'physical' ? 'Run after manager approval' : 'Run automatically') : a.status === 'pending_approval' ? 'Still waiting for approval' : a.status.replace('_', ' ')}</td></tr>`))}
           <p class="note">Downtime ${v.downtimeMin ?? 'n/a'} min, scrap ${v.scrapKg ?? 'n/a'} kg, escalations ${v.escalations}. ${v.mockMessages} alerts and ${v.mockCommands} machine commands went to sandbox mocks only.</p></div></div>
@@ -452,9 +465,10 @@
           <label style="flex-direction:row;align-items:center;gap:8px;color:var(--fg);font-size:.9rem"><input id="sf-peak" name="peak" type="checkbox"> During peak production (value per hour × 1.5)</label>
           <div class="row" style="align-items:end"><button class="btn go">Run scenario</button></div></form><p class="err"></p></section>
       <section class="panel sim" id="sim-out"></section>
-      <section class="panel sim"><div class="head"><h2>Scenarios the model was not trained on: before and after the cross-check</h2><span class="simtag">SIMULATED</span></div>
-        <p class="small muted">Same model both times; it has not been retrained. "Before" is the recorded result from before the activity monitor was connected to the fault model. "After" was just re-run with default settings.</p>
-        ${table(['Scenario', 'Before cross-check', 'After cross-check', '#Loss if caught early', '#Loss if nobody acts'], cmp.map((c) => `<tr><td><b>${esc(c.name)}</b><br><span class="small muted">${esc(c.truth)}</span></td><td><b>${OUTCOME[c.before.outcome]}</b><br><span class="small">${esc(c.before.text)}</span></td><td><b>${OUTCOME[c.after.outcome]}</b><br><span class="small">${esc(c.after.text)}</span></td><td class="num">${money(c.after.losses.early)}</td><td class="num">${money(c.after.losses.never)}</td></tr>`))}</section>
+      <section class="panel sim"><div class="head"><h2>Every scenario: before the cross-check, after round 1, after round 2</h2><span class="simtag">SIMULATED</span></div>
+        <p class="small muted">The same model throughout; it has not been retrained. The first two columns are recorded results. "After round 2" was just re-run with default settings, so slow scenarios near the threshold can come out differently from one run to the next.</p>
+        ${table(['Scenario', 'Before cross-check', 'After round 1', 'After round 2', '#Opened at', '#Loss if caught early', '#Loss if nobody acts'], cmp.map((c) => `<tr><td><b>${esc(c.name)}</b><br><span class="small muted">${c.trained ? 'Trained fault' : esc(c.truth)}</span></td><td><b>${OUTCOME_OLD[c.before.outcome]}</b>${c.trained ? '' : `<br><span class="small">${esc(c.before.text)}</span>`}</td><td><b>${OUTCOME_OLD[c.round1.outcome]}</b>${c.trained ? '' : `<br><span class="small">${esc(c.round1.text)}</span>`}</td><td><b>${OUTCOME[c.after.outcome]}</b><br><span class="small">${esc(c.after.text)}</span></td><td class="num">${c.after.openConfidence === null ? 'no issue' : Math.round(c.after.openConfidence * 100) + ' %'}</td><td class="num">${c.after.losses.earlyIgnored === null ? money(c.after.losses.early) : `heeded ${money(c.after.losses.early)}<br>ignored ${money(c.after.losses.earlyIgnored)}`}</td><td class="num">${money(c.after.losses.never)}</td></tr>`))}
+        <p class="note">"Opened at" is the confidence when the issue was first raised. A trained fault must open above the unknown-anomaly threshold to be named from the start.</p></section>
       <section class="panel sim"><div class="head"><h2>Stored runs</h2><span class="row"><span class="simtag">SIMULATED</span><a class="btn plain" href="api/sim/runs.csv">Export CSV</a></span></div>
         ${table(['Run', 'When', 'By', 'Scenario', 'Settings', '#Detected after', '#Caught early', '#Caught late', '#Nobody acts'], runs.map((r) => `<tr class="click" data-run="${r.id}"><td>${r.id}</td><td>${stamp(r.created_at)}</td><td>${esc((r.created_by || '').replace(/ \(.*/, ''))}</td><td>${esc(r.scenario)}${(SCENARIOS.find((s) => s.name === r.scenario) || {}).trained === false ? ' <span class="sev medium">untrained</span>' : ''}</td>
           <td class="small">severity ${r.params.severity}, speed ${r.params.speed}, ${String(r.params.startHour).padStart(2, '0')}:00${r.params.peak ? ', peak' : ''}, response ${r.params.responseMin} min, late +${r.params.lateMin} min</td>

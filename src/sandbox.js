@@ -112,7 +112,7 @@ function runOne({ model, modelVersionId, costs, ttfMin, unknownThreshold, fault,
   if (issue && issue.type !== 'sensor' && issue.type !== 'unknown' && ex.confidence_note) handling += ` ${ex.confidence_note}`;
   if (issue && ex.sensor_note) handling += ` ${ex.sensor_note}`;
   if (warned) handling += ignoreWarning ? ' The machine action carried a low-confidence warning; in this run the manager approved it anyway.' : ' The machine action carried a low-confidence warning; in this run the manager heeded it and did not approve.';
-  if (outcome === 'misnamed' && responded && actuator.commands.length) note += ' The machine was stopped for a problem it did not have.';
+  if (outcome === 'misnamed' && responded && actuator.commands.some((x) => x.kind === 'stop_feed' || x.kind === 'safe_shutdown')) note += ' The machine was stopped for a problem it did not have.';
   if (issue && flags.length) handling += ` The activity monitor also flagged "${flags[0].title}" at minute ${Math.floor(flags[0].m)}.`;
 
   return {
