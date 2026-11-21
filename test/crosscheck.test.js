@@ -44,18 +44,19 @@ test('a diagnosis that depends on a flagged sensor is shown as a possible sensor
   assert.ok(notifier.sent.some((m) => m.user.name.startsWith('Giorgi') && m.text.startsWith('Sensor issue on')), 'the technician is alerted as a sensor issue');
 });
 test('an issue that is already open is reclassified when its sensor is flagged later, and its machine action is withdrawn', () => {
-  const { db, eng, actuator, run, issue, actions } = rig();
-  run(30); eng.injectFault('starve', U.op); run(30);
-  assert.equal(issue().type, 'starve');
-  assert.equal(actions().find((a) => a.kind === 'stop_feed').status, 'pending_approval');
-  eng.setQuirk('freeze', U.op); run(80);                 // the pressure sensor the diagnosis leans on now reads one fixed value
+  const { db, eng, actuator, run, start, issue, actions } = rig();
+  eng.setUnknownThreshold(0, U.mgr);                     // name every diagnosis, so this test is about the sensor cross-check only
+  run(30); start('sensor_drift'); run(160);
+  assert.equal(issue().type, 'block');                   // nothing backs it up: only the pressure reading is off
+  assert.equal(actions().find((a) => a.kind === 'safe_shutdown').status, 'pending_approval');
+  eng.setQuirk('freeze', U.op); run(80);                 // the one sensor the diagnosis leans on now reads a fixed value
   const i = issue();
   assert.equal(i.type, 'sensor'); assert.match(i.title, /filling pressure sensor/);
-  assert.equal(i.explanation.original.type, 'starve');
-  assert.equal(actions().find((a) => a.kind === 'stop_feed').status, 'cancelled');
+  assert.equal(i.explanation.original.type, 'block');
+  assert.equal(actions().find((a) => a.kind === 'safe_shutdown').status, 'cancelled');
   assert.ok(actions().some((a) => a.kind === 'sensor_work_order' && a.status === 'done'));
   assert.equal(db.prepare("SELECT COUNT(*) n FROM events WHERE type = 'reclassified'").get().n, 1);
-  assert.equal(actuator.commands.filter((c) => c.kind === 'stop_feed').length, 0);
+  assert.equal(actuator.commands.filter((c) => c.kind === 'safe_shutdown').length, 0);
 });
 test('trained machine faults are not turned into sensor faults', () => {
   for (const fault of TRAINED) { const r = runScenario({ fault }, { model }); assert.equal(r.early.outcome, 'correct', `${fault} should still be diagnosed correctly`); assert.equal(r.before, null); }
@@ -64,7 +65,7 @@ test('trained machine faults are not turned into sensor faults', () => {
 // ---- 2. single-sensor diagnoses lose confidence and cannot act alone --------
 test('a diagnosis resting on one sensor has lowered confidence, says so, and its machine action waits for the manager with a warning', () => {
   const { eng, run, start, issue, actions } = rig();
-  autoEverything(eng);
+  autoEverything(eng); eng.setUnknownThreshold(0, U.mgr);   // threshold off: this test is about single-sensor confidence only
   run(30); start('sensor_drift'); run(160);
   const i = issue();
   assert.equal(i.type, 'block', 'the model still names a blockage: it was not retrained');
@@ -114,12 +115,12 @@ test('an out-of-range reading is hidden from the model but still flagged and sen
 
 // ---- 4. before / after comparison -------------------------------------------
 test('the comparison keeps the recorded "before" results and reruns the five untrained scenarios', () => {
-  const rows = crossCheckComparison({ model });
+  const rows = crossCheckComparison({ model }).filter((r) => !r.trained);
   assert.deepEqual(rows.map((r) => r.key), ['sensor_frozen', 'sensor_dropout', 'sensor_drift', 'power_surge', 'perf_drop']);
-  for (const r of rows) { assert.deepEqual(r.before, BEFORE_CROSSCHECK[r.key]); assert.ok(r.after.text.length > 20); assert.notEqual(r.after.outcome, 'correct'); }
+  for (const r of rows) { assert.deepEqual(r.before, BEFORE_CROSSCHECK[r.key]); assert.ok(r.round1.text.length > 20); assert.ok(r.after.text.length > 20); assert.notEqual(r.after.outcome, 'correct'); }
   const by = Object.fromEntries(rows.map((r) => [r.key, r]));
-  assert.equal(by.sensor_dropout.before.outcome, 'misnamed'); assert.equal(by.sensor_dropout.after.outcome, 'sensor');
+  assert.equal(by.sensor_dropout.before.outcome, 'misnamed'); assert.equal(by.sensor_dropout.round1.outcome, 'sensor'); assert.equal(by.sensor_dropout.after.outcome, 'sensor');
   assert.equal(by.sensor_frozen.after.outcome, 'missed'); assert.match(by.sensor_frozen.after.text, /alerted Giorgi/);
-  assert.equal(by.sensor_drift.after.outcome, 'misnamed'); assert.match(by.sensor_drift.after.text, /rests on one sensor/);
-  assert.ok(by.sensor_drift.after.confidence <= 0.5);
+  assert.equal(by.sensor_drift.after.openType, 'unknown', 'drift now opens as an unclassified anomaly');
+  assert.ok(by.sensor_drift.after.openConfidence < 0.4);
 });

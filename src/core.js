@@ -68,33 +68,48 @@ class Sentinel {
   }
 
   // ---- issues --------------------------------------------------------------
-  // Turns the model's raw verdict into what people are shown, after two cross-checks:
-  //  1. if the activity monitor distrusts a sensor the verdict depends on, it becomes a possible sensor fault;
-  //  2. if the verdict rests on one sensor while everything else looks normal, its confidence is lowered.
+  // Turns the model's raw verdict into what people are shown, after three cross-checks:
+  //  1. if the activity monitor distrusts a sensor the verdict depends on AND no trusted sensor backs the verdict up, it becomes a possible sensor fault;
+  //  2. if the verdict rests on one sensor while everything else looks normal, its confidence is lowered;
+  //  3. if confidence ends up below the unknown threshold, no fault is named: it is an unclassified anomaly to inspect.
   diagnose(p, extraKeys = []) {
     const T0 = TYPES[p.type] || TYPES.unknown;
     const keys = [...new Set([...p.contributions.map((x) => x.key), ...extraKeys])];
-    const suspects = unusual.suspectKeys(this), hit = keys.find((k) => suspects[k]);
-    if (hit) {
-      const T = TYPES.sensor, name = SIG[hit].label.toLowerCase();
-      return { type: 'sensor', T, keys, title: `Possible sensor fault: check the ${name} sensor`, comp: [STATION_OF[hit]], severity: T.sev, confidence: p.confidence, low: false, single: null,
-        sensor: { key: hit, label: SIG[hit].label, why: suspects[hit].why }, original: { type: p.type, label: T0.label, title: T0.title, confidence: p.confidence },
-        cause: `The ${name} sensor ${suspects[hit].why}, and this diagnosis depends on it. ${T.cause}`, note: null };
-    }
     // a signal counts as deviating only if it has been off in at least 5 of the last 6 readings, so one noisy sample neither creates nor hides support
     const hist = this.zHist && this.zHist.length >= 6 ? this.zHist : [p.z];
     const deviating = KEYS.filter((k) => hist.filter((z) => Math.abs(z[k] || 0) > 3).length >= Math.min(5, hist.length));
+    const suspects = unusual.suspectKeys(this), hit = keys.find((k) => suspects[k]);
+    let sensorNote = null;
+    if (hit) {
+      // Corroboration: do sensors we still trust move the way this fault predicts?
+      const expected = this.detector.expected(p.type);
+      const support = deviating.filter((k) => !suspects[k] && (expected ? expected[k] === Math.sign(p.z[k]) : true));
+      const name = SIG[hit].label.toLowerCase();
+      if (!support.length) {
+        const T = TYPES.sensor;
+        return { type: 'sensor', T, keys, title: `Possible sensor fault: check the ${name} sensor`, comp: [STATION_OF[hit]], severity: T.sev, confidence: p.confidence, low: false, single: null, candidate: null, sensorNote: null,
+          sensor: { key: hit, label: SIG[hit].label, why: suspects[hit].why }, original: { type: p.type, label: T0.label, title: T0.title, confidence: p.confidence },
+          cause: `The ${name} sensor ${suspects[hit].why}, and no other sensor backs this diagnosis up. ${T.cause}`, note: null };
+      }
+      sensorNote = `The ${name} sensor ${suspects[hit].why}, but ${support.map((k) => SIG[k].label.toLowerCase()).join(', ')} ${support.length === 1 ? 'agrees' : 'agree'} with this diagnosis, so it is treated as a real machine fault. Check the sensor as well.`;
+    }
     const single = deviating.length === 1 ? deviating[0] : null;
     const confidence = single ? +Math.min(0.5, p.confidence * 0.6).toFixed(3) : p.confidence;
+    const stored = Number(this.setting('unknown_threshold')), threshold = Number.isFinite(stored) ? stored : 0.4;   // 0 is a valid setting: name everything
+    const singleNote = single ? `Confidence lowered from ${Math.round(p.confidence * 100)} % to ${Math.round(confidence * 100)} %: this diagnosis rests on one sensor (${SIG[single].label.toLowerCase()}) while every other reading looks normal. It could be the machine or the sensor.` : null;
+    if (p.type === 'unknown' || confidence < threshold) {
+      const T = TYPES.unknown, candidate = p.type === 'unknown' ? null : { type: p.type, label: T0.label, title: T0.title, confidence };
+      const note = candidate ? `Most likely "${T0.label}", but at ${Math.round(confidence * 100)} % confidence, below the ${Math.round(threshold * 100)} % needed to name a fault.${singleNote ? ' ' + singleNote : ''}` : 'The pattern does not match any fault the model was trained on.';
+      return { type: 'unknown', T, keys, title: T.title, comp: candidate ? T0.comp : [], severity: T.sev, confidence, low: false, single, candidate, sensorNote, sensor: null, original: null, cause: T.cause, note };
+    }
     const low = !!single || confidence < LOW_CONFIDENCE;
-    const note = single ? `Confidence lowered from ${Math.round(p.confidence * 100)} % to ${Math.round(confidence * 100)} %: this diagnosis rests on one sensor (${SIG[single].label.toLowerCase()}) while every other reading looks normal. It could be the machine or the sensor.`
-      : low ? `Low confidence (${Math.round(confidence * 100)} %): the readings only loosely match this fault.` : null;
-    return { type: p.type, T: T0, keys, title: T0.title, comp: T0.comp, severity: T0.sev, confidence, low, single, sensor: null, original: null, cause: T0.cause, note };
+    const note = singleNote || (low ? `Low confidence (${Math.round(confidence * 100)} %): the readings only loosely match this fault.` : null);
+    return { type: p.type, T: T0, keys, title: T0.title, comp: T0.comp, severity: T0.sev, confidence, low, single, candidate: null, sensorNote, sensor: null, original: null, cause: T0.cause, note };
   }
 
   explain(p, d) {
     return { summary: d.cause, contributions: p.contributions, score: p.score, threshold: +this.detector.model.thr.toFixed(4), max_deviation: p.maxAbsZ, type_similarity: p.typeSimilarity,
-      recommended: d.T.action, sensor: d.sensor, original: d.original, confidence_note: d.note, single_sensor: d.single, model_confidence: p.confidence };
+      recommended: d.T.action, sensor: d.sensor, original: d.original, candidate: d.candidate, sensor_note: d.sensorNote, confidence_note: d.note, single_sensor: d.single, model_confidence: p.confidence };
   }
 
   openIssue(p) {
@@ -102,39 +117,61 @@ class Sentinel {
     const projected = loss.projectedLoss(T.failProb, T.failure, c);
     const id = Number(this.db.prepare('INSERT INTO issues (machine_id, component, type, title, severity, confidence, fail_prob, explanation, model_version_id, status, is_simulated, detected_at, projected_loss) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(this.machineId, d.comp[0] || null, d.type, d.title, d.severity, d.confidence, T.failProb, JSON.stringify(this.explain(p, d)), this.modelVersionId, 'detected', this.simulated ? 1 : 0, now, projected).lastInsertRowid);
-    this.active = { id, type: d.type, modelType: p.type, title: d.title, cause: d.cause, comp: d.comp, keys: d.keys, low: d.low, single: d.single, note: d.note, sensor: d.sensor, original: d.original,
-      severity: d.severity, confidence: d.confidence, detectedAt: now, downtime_h: 0, scrap_kg: 0, level: 0, lastNotifyAt: 0, acked: false, rul: null };
-    this.event('issue_detected', 'model', `model v${this.modelVersionId ?? 0}`, `${d.title} (${d.severity}, ${Math.round(d.confidence * 100)} % confidence)${d.original ? `. If the sensor is correct: ${d.original.title}` : ''}${d.note ? '. ' + d.note : ''}`, { issueId: id, refTable: 'issues', refId: id, data: { contributions: p.contributions.map((x) => x.text) } });
+    this.active = { id, type: d.type, modelType: p.type, title: d.title, cause: d.cause, comp: d.comp, keys: d.keys, low: d.low, single: d.single, note: d.note, sensor: d.sensor, original: d.original, candidate: d.candidate, sensorNote: d.sensorNote,
+      severity: d.severity, confidence: d.confidence, openType: d.type, openConfidence: d.confidence, detectedAt: now, downtime_h: 0, scrap_kg: 0, level: 0, lastNotifyAt: 0, acked: false, rul: null };
+    const extra = d.original ? `. If the sensor is correct: ${d.original.title}` : d.candidate ? `. Most likely, low confidence: ${d.candidate.title}` : '';
+    this.event('issue_detected', 'model', `model v${this.modelVersionId ?? 0}`, `${d.title} (${d.severity}, ${Math.round(d.confidence * 100)} % confidence)${extra}${d.note ? '. ' + d.note : ''}${d.sensorNote ? ' ' + d.sensorNote : ''}`, { issueId: id, refTable: 'issues', refId: id, data: { contributions: p.contributions.map((x) => x.text) } });
     this.notifyLevel(1);
     this.planActions(p);
     return id;
   }
 
-  // Re-checks an open issue on every tick: a sensor flagged later turns it into a sensor issue; a second sensor agreeing lifts a low-confidence warning.
+  // Re-checks an open issue on every tick. A change of diagnosis must hold for 3 seconds before it is applied.
+  //   any diagnosis -> possible sensor fault   when its sensor is flagged and nothing backs the diagnosis up
+  //   sensor fault  -> machine fault           when trusted sensors come to agree, or the sensor is no longer flagged
+  //   unclassified  -> named fault             when confidence reaches the threshold
   crossCheck(p) {
     const a = this.active;
-    if (!a || a.type === 'sensor' || this.stopped || !p.anomaly) return;
-    const d = this.diagnose(p, a.keys), now = this.now();
-    if (d.type === 'sensor') {
-      const T = d.T, projected = loss.projectedLoss(T.failProb, T.failure, this.costs());
-      d.original = { type: a.type, label: (TYPES[a.type] || TYPES.unknown).label, title: a.title, confidence: a.confidence };
-      this.db.prepare('UPDATE issues SET type = ?, title = ?, component = ?, severity = ?, fail_prob = ?, projected_loss = ?, explanation = ? WHERE id = ?')
-        .run('sensor', d.title, d.comp[0], d.severity, T.failProb, projected, JSON.stringify(this.explain(p, d)), a.id);
-      const cancelled = this.db.prepare("UPDATE actions SET status = 'cancelled', decided_at = ? WHERE issue_id = ? AND risk = 'physical' AND status IN ('pending_approval', 'suggested')").run(now, a.id).changes;
-      Object.assign(a, { type: 'sensor', title: d.title, cause: d.cause, comp: d.comp, severity: d.severity, low: false, single: null, note: null, sensor: d.sensor, original: d.original, rul: null });
-      this.event('reclassified', 'system', 'cross-check', `Changed to "${d.title}": the ${d.sensor.label.toLowerCase()} sensor ${d.sensor.why}. If the sensor is correct: ${d.original.title}.${cancelled ? ` ${cancelled} machine action${cancelled === 1 ? '' : 's'} withdrawn.` : ''}`, { issueId: a.id });
-      this.planActions(p);
-      this.notifyLevel(Math.max(1, a.level));
+    if (!a || this.stopped || !p.anomaly) return;
+    const d = this.diagnose(p, a.keys);
+    const change = (d.type === 'sensor' && a.type !== 'sensor') || (a.type === 'sensor' && d.type !== 'sensor') || (a.type === 'unknown' && d.type !== 'unknown');
+    if (change) {
+      a.pending = a.pending && a.pending.type === d.type ? { type: d.type, n: a.pending.n + 1 } : { type: d.type, n: 1 };
+      if (a.pending.n >= OPEN_AFTER) { a.pending = null; this.reclassify(d, p); }
       return;
     }
-    if (a.low && d.type === a.type && !d.low) {
+    a.pending = null;
+    if (d.type !== a.type) return;
+    if (d.sensorNote && !a.sensorNote) { a.sensorNote = d.sensorNote; this.patchExplanation({ sensor_note: d.sensorNote }); this.event('sensor_note', 'system', 'cross-check', d.sensorNote, { issueId: a.id }); }
+    if (a.low && !d.low) {
       a.low = false; a.single = null; a.note = null; a.confidence = d.confidence;
-      const ex = JSON.parse(this.db.prepare('SELECT explanation FROM issues WHERE id = ?').get(a.id).explanation);
-      ex.confidence_note = null; ex.single_sensor = null; ex.confirmed = 'Other sensors now agree with this diagnosis.';
-      this.db.prepare('UPDATE issues SET confidence = ?, explanation = ? WHERE id = ?').run(d.confidence, JSON.stringify(ex), a.id);
+      this.patchExplanation({ confidence_note: null, single_sensor: null, confirmed: 'Other sensors now agree with this diagnosis.' }, d.confidence);
       this.db.prepare("UPDATE actions SET reason = replace(reason, 'Low confidence. Check the machine before approving. ', '') WHERE issue_id = ? AND status = 'pending_approval'").run(a.id);
       this.event('confidence_raised', 'model', `model v${this.modelVersionId ?? 0}`, `Confidence raised to ${Math.round(d.confidence * 100)} %: other sensors now agree with the diagnosis. Low-confidence warning removed.`, { issueId: a.id });
     }
+  }
+
+  patchExplanation(fields, confidence = null) {
+    const a = this.active, ex = JSON.parse(this.db.prepare('SELECT explanation FROM issues WHERE id = ?').get(a.id).explanation);
+    Object.assign(ex, fields);
+    this.db.prepare('UPDATE issues SET explanation = ?, confidence = COALESCE(?, confidence) WHERE id = ?').run(JSON.stringify(ex), confidence, a.id);
+  }
+
+  reclassify(d, p) {
+    const a = this.active, T = d.T, now = this.now(), prev = { type: a.type, title: a.title };
+    if (d.type === 'sensor') d.original = a.original || (a.candidate ? { ...a.candidate } : { type: a.type, label: (TYPES[a.type] || TYPES.unknown).label, title: a.title, confidence: a.confidence });
+    const why = d.type === 'sensor' ? `The ${d.sensor.label.toLowerCase()} sensor ${d.sensor.why} and no other sensor backs the diagnosis up. If the sensor is correct: ${d.original.title}.`
+      : prev.type === 'sensor' ? (d.sensorNote || 'The sensor is no longer flagged, so the machine diagnosis stands.')
+      : `Confidence reached ${Math.round(d.confidence * 100)} %.`;
+    this.db.prepare('UPDATE issues SET type = ?, title = ?, component = ?, severity = ?, confidence = ?, fail_prob = ?, projected_loss = ?, explanation = ? WHERE id = ?')
+      .run(d.type, d.title, d.comp[0] || null, d.severity, d.confidence, T.failProb, loss.projectedLoss(T.failProb, T.failure, this.costs()), JSON.stringify(this.explain(p, d)), a.id);
+    const keep = T.actions.map(() => '?').join(',');
+    const cancelled = this.db.prepare(`UPDATE actions SET status = 'cancelled', decided_at = ? WHERE issue_id = ? AND status IN ('pending_approval', 'suggested') AND kind NOT IN (${keep})`).run(now, a.id, ...T.actions).changes;
+    Object.assign(a, { type: d.type, title: d.title, cause: d.cause, comp: d.comp, severity: d.severity, confidence: d.confidence, low: d.low, single: d.single, note: d.note, sensor: d.sensor, original: d.original, candidate: d.candidate, sensorNote: d.sensorNote });
+    if (d.type !== 'bearing') a.rul = null;
+    this.event('reclassified', 'system', 'cross-check', `Changed from "${prev.title}" to "${d.title}". ${why}${cancelled ? ` ${cancelled} waiting action${cancelled === 1 ? '' : 's'} withdrawn.` : ''}`, { issueId: a.id });
+    this.planActions(p);
+    this.notifyLevel(Math.max(1, a.level));
   }
 
   accrue(p) {
@@ -316,6 +353,17 @@ class Sentinel {
     this.event('demo_fault', 'user', user.name, fault ? `Demo: "${FAULTS[fault].name}" played into the simulated machine` : 'Demo: simulated machine set back to normal');
   }
 
+  // Confidence below which no fault is named.
+  setUnknownThreshold(value, user) {
+    this.need(user, 'manager');
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0 || n > 1) throw new BadRequest('The threshold must be between 0 and 1');
+    const old = this.setting('unknown_threshold');
+    this.db.prepare("UPDATE settings SET value = ? WHERE key = 'unknown_threshold'").run(String(n));
+    this.event('config_changed', 'user', user.name, `${user.name} changed the unknown-anomaly threshold from ${Math.round(old * 100)} % to ${Math.round(n * 100)} %`);
+    this.audit(user, 'set_unknown_threshold', { from: Number(old), to: n });
+  }
+
   // Assumed values behind the risk projection and the simulator.
   assumptions() { return JSON.parse(this.setting('assumptions')); }
   setAssumptions(body, user) {
@@ -352,7 +400,7 @@ class Sentinel {
     };
     if (a) {
       const T = TYPES[a.type] || TYPES.unknown;
-      out.active = { id: a.id, type: a.type, label: T.label, title: a.title, cause: a.cause, check: T.check, comp: a.comp, severity: a.severity, confidence: a.confidence, low: a.low, note: a.note, original: a.original, sensor: a.sensor,
+      out.active = { id: a.id, type: a.type, label: T.label, title: a.title, cause: a.cause, check: T.check, comp: a.comp, severity: a.severity, confidence: a.confidence, low: a.low, note: a.note, original: a.original, sensor: a.sensor, candidate: a.candidate, sensorNote: a.sensorNote,
         detectedAt: a.detectedAt, acked: a.acked, level: a.level, rul: a.rul, loss: this.liveLoss(a), contributions: (this.last && this.last.contributions.length ? this.last.contributions : []).map((x) => x.text) };
       out.actions = this.db.prepare('SELECT id, kind, risk, status, reason FROM actions WHERE issue_id = ? ORDER BY id').all(a.id).map((x) => ({ ...x, label: ACTIONS[x.kind].label, reversible: ACTIONS[x.kind].reversible, warn: x.reason.startsWith('Low confidence') }));
     }

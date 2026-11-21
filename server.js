@@ -89,21 +89,22 @@ async function api(req, res, url) {
   if (p === '/api/issues.csv' && GET) return csv(res, 'ap800-issues.csv', reports.issues(db, { limit: 2000 }).map((i) => ({ ...i, detected_at: new Date(i.detected_at).toISOString(), acked_at: i.acked_at && new Date(i.acked_at).toISOString(), resolved_at: i.resolved_at && new Date(i.resolved_at).toISOString() })));
 
   if (p === '/api/finance' && GET) { engine.need(user, 'manager'); return send(res, 200, reports.finance(db)); }
-  if (p === '/api/settings' && GET) { engine.need(user, 'manager'); return send(res, 200, { settings: Object.fromEntries(db.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, r.value === '1'])), costs: engine.costs(),
+  if (p === '/api/settings' && GET) { engine.need(user, 'manager'); return send(res, 200, { settings: Object.fromEntries(db.prepare("SELECT key, value FROM settings WHERE value IN ('0', '1')").all().map((r) => [r.key, r.value === '1'])), unknownThreshold: Number(engine.setting('unknown_threshold')), costs: engine.costs(),
     chain: db.prepare('SELECT r.level, u.name, u.role, u.shift FROM responsibilities r JOIN users u ON u.id = r.user_id ORDER BY r.level, u.id').all(), escalateAfterS: engine.escalateAfterS,
     audit: db.prepare('SELECT a.ts, u.name, a.action, a.detail FROM audit_log a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 40').all() }); }
   if (p === '/api/settings' && POST) { const body = await readBody(req); engine.setSetting(String(body.key), !!body.value, user); return send(res, 200, { ok: true }); }
+  if (p === '/api/threshold' && POST) { const body = await readBody(req); engine.setUnknownThreshold(body.value, user); return send(res, 200, { ok: true }); }
   if (p === '/api/costs' && POST) { engine.setCosts(await readBody(req), user); return send(res, 200, { ok: true }); }
 
   // ---- Phase 2: sandbox simulator, risk projection, unusual activity ----------
   if (p === '/api/sim/run' && POST) {
     engine.need(user, 'technician');
-    const result = runScenario(await readBody(req), { model, modelVersionId: versionId, costs: engine.costs(), ttfMin: engine.assumptions().ttf_min });   // isolated: own database, mock notifiers, mock actuator
+    const result = runScenario(await readBody(req), { model, modelVersionId: versionId, costs: engine.costs(), ttfMin: engine.assumptions().ttf_min, unknownThreshold: Number(engine.setting('unknown_threshold')) });   // isolated: own database, mock notifiers, mock actuator
     const id = Number(db.prepare('INSERT INTO simulations (created_at, created_by, scenario, params, detect_min, loss_early, loss_late, loss_never, result) VALUES (?,?,?,?,?,?,?,?,?)')
       .run(Date.now(), user.name, result.scenario, JSON.stringify(result.params), result.early.detectMin, result.early.loss, result.late.loss, result.never.loss, JSON.stringify(result)).lastInsertRowid);
     return send(res, 200, { id, ...result });
   }
-  if (p === '/api/sim/crosscheck' && GET) { engine.need(user, 'technician'); return send(res, 200, crossCheckComparison({ model, modelVersionId: versionId, costs: engine.costs(), ttfMin: engine.assumptions().ttf_min })); }
+  if (p === '/api/sim/crosscheck' && GET) { engine.need(user, 'technician'); return send(res, 200, crossCheckComparison({ model, modelVersionId: versionId, costs: engine.costs(), ttfMin: engine.assumptions().ttf_min, unknownThreshold: Number(engine.setting('unknown_threshold')) })); }
   const simRows = () => db.prepare('SELECT id, created_at, created_by, scenario, params, detect_min, loss_early, loss_late, loss_never FROM simulations ORDER BY id DESC LIMIT 200').all();
   if (p === '/api/sim/runs' && GET) { engine.need(user, 'technician'); return send(res, 200, simRows().map((r) => ({ ...r, params: JSON.parse(r.params) }))); }
   if (p === '/api/sim/runs.csv' && GET) { engine.need(user, 'technician'); return csv(res, 'ap800-simulations.csv', simRows().map((r) => ({ SIMULATED: 'yes', ...r, created_at: new Date(r.created_at).toISOString() }))); }

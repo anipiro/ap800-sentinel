@@ -73,6 +73,14 @@ function evaluate(model) {
 class IssueDetector {
   constructor(model) { this.model = model; }
 
+  // For a trained fault: the signals it is expected to move and the direction (+1 up, -1 down), read from its learned patterns.
+  expected(type) {
+    const cs = this.model.centroids[type]; if (!cs) return null;
+    const out = {};
+    KEYS.forEach((k, i) => { const v = Math.abs(cs[1][i]) >= Math.abs(cs[0][i]) ? cs[1][i] : cs[0][i]; if (Math.abs(v) >= 0.15) out[k] = Math.sign(v); });
+    return out;
+  }
+
   // readings: smoothed value per signal. Returns the verdict plus what drove it.
   predict(machineId, readings) {
     const m = this.model, z = zvec(m.base, readings);

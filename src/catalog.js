@@ -66,17 +66,18 @@ const TYPES = {
     failProb: 0.2, failure: { downtime_h: 0.25, repair_h: 1, parts: 350 }, preventive: { downtime_h: 0, repair_h: 0.5, parts: 350 },
     actions: ['sensor_work_order'] },
   unknown: { label: 'Unclassified anomaly', category: 'Unknown', comp: [], sev: 'medium',
-    title: 'Readings do not match normal running',
-    cause: 'The pattern does not match any fault the model was trained on.',
+    title: 'Unclassified anomaly: inspect the machine',
+    cause: 'The readings are not normal, but they do not match any trained fault well enough to name one.',
     check: ['Look at the highlighted readings', 'Inspect the machine'],
     action: 'Inspect the machine.',
     failProb: 0.3, failure: { downtime_h: 2, repair_h: 2, parts: 500 }, preventive: { downtime_h: 0.5, repair_h: 0.5, parts: 0 },
-    actions: ['create_work_order'] },
+    actions: ['inspection_work_order'] },
 };
 
 // risk 'low' may run automatically. risk 'physical' changes what the machine does and needs approval by default.
 const ACTIONS = {
   create_work_order:    { label: 'Create a work order',                    risk: 'low',      reversible: false },
+  inspection_work_order: { label: 'Create a work order to inspect the machine', risk: 'low',   reversible: false },
   sensor_work_order:    { label: 'Create a work order to check the sensor', risk: 'low',     reversible: false },
   schedule_maintenance: { label: 'Schedule maintenance at the next stop',  risk: 'low',      reversible: false },
   hold_batch:           { label: 'Hold recent product for inspection',     risk: 'low',      reversible: true },

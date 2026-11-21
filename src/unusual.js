@@ -82,8 +82,17 @@ function raise(eng, kind, key, explanation, data = null) {
   return id;
 }
 
+function dataGap(eng, from, to) {
+  for (const k of KEYS) { mark(eng, k, 'gap', 'had a gap in its data just before'); eng.suspects[k].last = eng.tickNo - SUSPECT_TICKS / 2; }   // distrust every sensor for the next 15 seconds
+  eng._steady = 0;
+  raise(eng, 'data_gap', String(from), `No readings were recorded for ${Math.round((to - from) / 1000)} seconds. The data link or the monitoring server was down.`, { from, to });
+}
+
 // Runs on every tick: impossible jumps only show between two consecutive raw samples.
 function everyTick(eng) {
+  const now = eng.now();
+  if (eng._lastTickTs && now - eng._lastTickTs > 15000) dataGap(eng, eng._lastTickTs, now);
+  eng._lastTickTs = now;
   eng._steady = eng.stopped || eng.cooldown > 0 || !eng.prevRaw ? 0 : (eng._steady || 0) + 1;
   for (const [k, s] of Object.entries(eng.suspects || {})) if (s.kind === 'rate' && eng.last && Math.abs(eng.last.z[k] || 0) > 3) s.last = eng.tickNo;   // still reading abnormally: stay suspicious
   if (eng._steady < 12) return;
@@ -100,8 +109,7 @@ function check(eng) {
   if (!eng.simulated && eng._bootTs !== undefined && !eng._gapChecked) {
     eng._gapChecked = true;
     const gap = eng._bootTs ? now - eng._bootTs : 0;
-    if (gap > 15000) for (const k of KEYS) { mark(eng, k, 'gap', 'had a gap in its data just before'); eng.suspects[k].last = eng.tickNo - SUSPECT_TICKS / 2; }
-    if (gap > 15000) raise(eng, 'data_gap', String(eng._bootTs), `No readings were recorded for ${Math.round(gap / 1000)} seconds. The data link or the monitoring server was down.`, { from: eng._bootTs, to: now });
+    if (gap > 15000) dataGap(eng, eng._bootTs, now);
   }
 
   for (const k of outOfRange(eng)) mark(eng, k, 'range', 'reads outside its physical range');
