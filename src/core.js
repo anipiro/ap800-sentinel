@@ -4,6 +4,7 @@ const { IssueDetector, DT } = require('./ml/detector');
 const { TYPES, ACTIONS, STATION_OF } = require('./catalog');
 const loss = require('./loss');
 const unusual = require('./unusual');
+const workorders = require('./workorders');
 
 const OPEN_AFTER = 6;      // consecutive anomalous ticks (3 s) before an issue is opened
 const CLEAR_AFTER = 20;    // consecutive normal ticks (10 s) before an issue clears by itself
@@ -288,6 +289,7 @@ class Sentinel {
 
   execute(kind, issueId) {
     const res = this.actuator.execute(kind, this.machineId);
+    workorders.onAction(this, kind, issueId);   // work-order actions become real work orders
     if (kind === 'stop_feed' || kind === 'safe_shutdown') this.stopped = true;   // effect on the simulated machine
     this.db.prepare('UPDATE issues SET action_at = COALESCE(action_at, ?) WHERE id = ?').run(this.now(), issueId);
     return res;

@@ -486,8 +486,42 @@
     };
   }
 
+  // ---- work orders and maintenance calendar ---------------------------------
+  const WO_STEPS = ['created', 'assigned', 'in_progress', 'completed', 'verified'];
+  const WO_NAME = { created: 'Created', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', verified: 'Verified' };
+  const hm = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const dayName = (ms) => new Date(ms).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'short' });
+  function woButtons(o, people) {
+    const mine = o.assigned_to === ME.id || can('manager');
+    if (o.status === 'created' && can('manager')) return `<select id="wo-who-${o.id}" aria-label="Assign work order ${o.id} to">${people.map((p) => `<option value="${p.id}">${esc(p.name.replace(/ \(.*/, ''))}</option>`).join('')}</select><button class="btn go" data-wo="${o.id}" data-op="assign">Assign</button>`;
+    if (o.status === 'created' && can('technician')) return `<button class="btn go" data-wo="${o.id}" data-op="assign">Take it</button>`;
+    if (o.status === 'assigned' && can('technician') && mine) return `<button class="btn go" data-wo="${o.id}" data-op="start">Start work</button>`;
+    if (o.status === 'in_progress' && can('technician') && mine) return `<input id="wo-note-${o.id}" placeholder="What was done" aria-label="What was done on work order ${o.id}" size="14"><button class="btn go" data-wo="${o.id}" data-op="complete">Complete</button>`;
+    if (o.status === 'completed' && can('manager')) return `<button class="btn go" data-wo="${o.id}" data-op="verify">Verify</button>`;
+    return '';
+  }
+  async function viewWork() {
+    const d = await api('api/workorders'), el = $('#v-work');
+    const open = d.orders.filter((o) => o.status !== 'completed' && o.status !== 'verified').sort((a, b) => a.window_start - b.window_start);
+    el.innerHTML = `<section class="panel"><div class="head"><h2>Maintenance calendar</h2><span class="small muted">Peak production ${d.peak.map(([a, b]) => `${a}:00 to ${b}:00`).join(' and ')} (placeholder hours)</span></div>
+        ${table(['Day', 'Suggested window', 'Work order', 'Assigned to', 'Why this window'], open.map((o) => `<tr><td>${dayName(o.window_start)}</td><td><b>${hm(o.window_start)} to ${hm(o.window_end)}</b>${o.in_peak ? ' <span class="sev critical">in peak</span>' : ''}<br><span class="small muted">must finish by ${hm(o.deadline)}, ${dayName(o.deadline)}</span></td><td>${o.id}: ${esc(o.title)}</td><td>${esc((o.assignee || 'nobody yet').replace(/ \(.*/, ''))}</td><td class="small">${esc(o.window_reason)}</td></tr>`))}
+        <p class="note">Each window is the earliest slot long enough for the job that avoids peak production and ends before the predicted failure. If no such slot exists, the job is scheduled at once and marked "in peak".</p></section>
+      <section class="panel"><div class="head"><h2>Work orders</h2><span class="small muted">Created automatically from detected issues</span></div>
+        ${table(['No.', 'Work order', 'Progress', 'Assigned to', 'Issue', ''], d.orders.map((o) => `<tr><td>${o.id}</td><td>${esc(o.title)}<br><span class="small muted">${o.duration_h} h job, created ${stamp(o.created_at)}${o.notes ? ', done: ' + esc(o.notes) : ''}</span></td>
+          <td><div class="flow">${WO_STEPS.map((s, i) => `<span class="${s === o.status ? 'on' : i < WO_STEPS.indexOf(o.status) ? 'past' : ''}">${WO_NAME[s]}</span>`).join('')}</div></td>
+          <td>${esc((o.assignee || '').replace(/ \(.*/, ''))}</td><td>${o.issue_id ? `<a href="#issue-${o.issue_id}">${o.issue_id}</a>` : ''}</td><td><span class="row">${woButtons(o, d.people)}</span></td></tr>`))}
+        <p class="err"></p></section>`;
+    el.onclick = (e) => {
+      const b = e.target.closest('button[data-wo]'); if (!b) return;
+      const id = b.dataset.wo, body = {};
+      if (b.dataset.op === 'assign' && $('#wo-who-' + id)) body.user_id = Number($('#wo-who-' + id).value);
+      if (b.dataset.op === 'complete') body.notes = ($('#wo-note-' + id) || {}).value || '';
+      act(b, `api/workorders/${id}/${b.dataset.op}`, body);
+    };
+  }
+
   // ---- routing -------------------------------------------------------------
-  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, risk: viewRisk, sim: viewSim, money: viewMoney, setup: viewSetup };
+  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, work: viewWork, risk: viewRisk, sim: viewSim, money: viewMoney, setup: viewSetup };
   function route(refreshOnly) {
     if (!ME) return;
     let h = location.hash.slice(1) || 'live', id = null;

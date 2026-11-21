@@ -144,6 +144,10 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
 .hist{display:flex;align-items:flex-end;gap:2px;height:150px;border-bottom:1px solid var(--line)}
 .hist i{flex:1;background:var(--sim);border-radius:2px 2px 0 0;min-width:2px}
 .heat td.num{min-width:38px;text-align:center}
+.flow{display:flex;flex-wrap:wrap;gap:4px;font-size:.78rem;color:var(--muted)}
+.flow span{padding:1px 7px;border:1px solid var(--line);border-radius:99px}
+.flow span.on{background:var(--fg);color:var(--panel);border-color:var(--fg);font-weight:600}
+.flow span.past{border-color:var(--ok);color:var(--ok)}
 .login{max-width:520px;margin:8vh auto 0;display:flex;flex-direction:column;gap:16px}
 .people{display:flex;flex-direction:column;gap:8px}
 .people button{display:flex;justify-content:space-between;gap:12px;text-align:left;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:6px;font-weight:500}
@@ -176,7 +180,7 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
     <div class="row"><button class="btn plain" id="mute" aria-pressed="false">Mute alarm</button><button class="btn plain" id="logout">Switch person</button></div>
   </header>
   <nav class="tabs" id="tabs" aria-label="Views">
-    <a href="#live">Live</a><a href="#issues">Issues</a><a href="#history">History</a><a href="#summary">Summary</a><a href="#risk" data-role="technician">Risk</a><a href="#sim" data-role="technician">Simulator</a><a href="#money" data-role="manager">Losses</a><a href="#setup" data-role="manager">Setup</a>
+    <a href="#live">Live</a><a href="#issues">Issues</a><a href="#work">Work orders</a><a href="#history">History</a><a href="#summary">Summary</a><a href="#risk" data-role="technician">Risk</a><a href="#sim" data-role="technician">Simulator</a><a href="#money" data-role="manager">Losses</a><a href="#setup" data-role="manager">Setup</a>
   </nav>
   <p class="note">Machine signals are simulated and run on a demo clock: one second here counts as one minute of production. Camera analysis runs on real footage of the machine.</p>
 
@@ -234,6 +238,7 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
 
   <main class="col" id="v-issues" hidden></main>
   <main class="col" id="v-issue" hidden></main>
+  <main class="col" id="v-work" hidden></main>
   <main class="col" id="v-history" hidden></main>
   <main class="col" id="v-summary" hidden></main>
   <main class="col" id="v-risk" hidden></main>
