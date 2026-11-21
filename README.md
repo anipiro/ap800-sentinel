@@ -13,7 +13,7 @@ Open http://localhost:4800 and choose a person to sign in as. Needs Node 22.13 o
 | Command | What it does |
 |---|---|
 | `npm start` | Runs the website, the simulated machine and the detection engine |
-| `npm test` | Runs the test suite (51 tests) |
+| `npm test` | Runs the test suite (59 tests) |
 | `npm run train` | Retrains the detection model on fresh synthetic data. Restart the server afterwards |
 | `npm run reset` | Deletes the database so the next start is clean |
 
@@ -77,6 +77,17 @@ Model metrics are measured on synthetic test data from the same simulator. They 
 - **Unusual activity**: frozen sensor, physically impossible readings (outside the sensor range, or changing faster than the quantity can), energy use while stopped, running outside 06:00 to 22:00, a safeguard switched off, three or more rejected or undone actions in a day, a gap in the data. Each flag can be marked expected, investigated or escalated. Every check has a test button on the Risk tab except the data gap, which appears after a server restart, and the safeguard change, which you trigger on the Setup page. Out-of-range readings are hidden from the fault model. Escalated flags land in the manager's inbox on the Live tab.
 - **Assumptions**: event rates, minutes to breakdown, the early-catch rate and bearing age are editable by the manager on the Setup page and labelled "assumed" on the Risk tab.
 - Everything simulated or projected is drawn with a dashed violet border and a SIMULATED or PROJECTION tag.
+
+## Maintenance operations (Phase 3)
+
+- **Work orders tab**: every work-order or maintenance action creates a work order linked to its issue. Lifecycle: created, assigned, in progress, completed, verified. Technicians take and work them; the manager assigns and verifies.
+- **Maintenance calendar**: each work order gets a suggested window: the earliest slot long enough for the job that avoids peak production (10:00 to 14:00 and 18:00 to 21:00, placeholders) and ends before the deadline. The deadline is the predicted time to failure where there is one, otherwise 2, 8, 24 or 72 hours by severity. If no slot fits, the job is scheduled at once and marked "in peak".
+- **Key figures** (Summary tab): OEE, availability, performance, quality, MTBF, MTTR, unplanned stops and downtime for the last hour, 24 hours or 7 days.
+- **Knowledge base**: when resolving an issue the technician records root cause, fix, parts and time. New issues of the same type show these past fixes. Searchable on the Issues tab.
+- **My work tab**: a phone-width view of the active issue, the person's work orders and unassigned ones, plus a QR code that opens the machine's status page.
+- **Spare parts** (Work orders tab): stock per part, linked to issue types. An issue that needs a part at or below its minimum shows a reorder warning with the delivery time. The manager edits stock.
+- **Shift handover** (Summary tab): what happened this shift, what is open, and what the next shift should watch.
+- Not built: Georgian interface (draft material in `docs/i18n-draft`), AI assistant, model monitoring, API and webhooks.
 
 ## Layout
 
