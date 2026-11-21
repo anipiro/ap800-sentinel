@@ -300,7 +300,7 @@
     const types = ['issue_detected', 'notification', 'escalated', 'acknowledged', 'action_auto', 'approval_requested', 'action_approved', 'action_rejected', 'action_reverted', 'severity_raised', 'resolved', 'verified', 'machine_restarted', 'config_changed', 'demo_fault'];
     el.innerHTML = `<section class="panel"><h2>Machine profile</h2><dl class="kv"><div><dt>Machine</dt><dd>${esc(p.name)}</dd></div><div><dt>Installed</dt><dd>${p.installed_at}</dd></div><div><dt>Runtime recorded</dt><dd>${p.runtime_h} h</dd></div>
         <div><dt>Issues</dt><dd>${p.failures}</dd></div><div><dt>Mean time between issues</dt><dd>${p.mtbf_h === null ? 'n/a' : p.mtbf_h + ' h'}</dd></div><div><dt>Downtime</dt><dd>${p.downtime_h} h</dd></div><div><dt>Total loss</dt><dd>${money(p.total_loss)}</dd></div>
-        <div><dt>Most frequent</dt><dd style="font-size:.9rem">${esc(p.top_types.join(', ') || 'none yet')}</dd></div></dl></section>
+        <div><dt>Most frequent</dt><dd style="font-size:.9rem">${esc(p.top_types.join(', ') || 'none yet')}</dd></div></dl>${machineQr()}</section>
       <section class="panel"><div class="head"><h2>History</h2><a class="btn plain" href="api/history.csv?${esc(histQuery)}">Export CSV</a></div>
         <form class="filters" id="hf"><label>Event type<select name="type"><option value="">All</option>${types.map((t) => `<option ${q.get('type') === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
           <label>Done by<select name="actor"><option value="">Anyone</option>${['user', 'model', 'rule', 'system'].map((t) => `<option ${q.get('actor') === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
@@ -500,6 +500,40 @@
     };
   }
 
+  // ---- QR code for the machine's status page ---------------------------------
+  function machineQr() {
+    const url = location.origin + location.pathname + '#live';
+    let code = '';
+    try { const q = window.qrcode(0, 'M'); q.addData(url); q.make(); code = `<span class="code" role="img" aria-label="QR code linking to the status page of this machine">${q.createSvgTag({ cellSize: 4, margin: 2 })}</span>`; } catch (e) { /* QR library not loaded: the address below still works */ }
+    return `<div class="qr">${code}<span><b>Dumpling line 1, AP800</b><br><span class="small muted">Scan to open this machine's status page. Print it and fix it to the machine.</span><br><code>${esc(url)}</code></span></div>`;
+  }
+
+  // ---- technician view: built for a phone ------------------------------------
+  async function viewMe() {
+    const d = await api('api/workorders'), el = $('#v-me'), a = state && state.active;
+    const mine = d.orders.filter((o) => o.assigned_to === ME.id && o.status !== 'verified' && o.status !== 'completed');
+    const free = d.orders.filter((o) => o.status === 'created');
+    const card = (o) => `<div class="card ${o.severity || ''}"><b>${o.id}: ${esc(o.title)}</b><span class="small muted">${WO_NAME[o.status]}, window ${hm(o.window_start)} to ${hm(o.window_end)} on ${dayName(o.window_start)}${o.in_peak ? ', in peak' : ''}, ${o.duration_h} h job</span>
+      <div class="row">${woButtons(o, d.people)}${o.issue_id ? `<a class="btn plain" href="#issue-${o.issue_id}">Issue ${o.issue_id}</a>` : ''}</div></div>`;
+    el.innerHTML = `<section class="panel"><div class="head"><h2>Machine now</h2><span class="sev ${state ? (state.machine.status === 'ok' ? 'ok' : state.machine.status === 'stopped' ? 'critical' : state.machine.status) : 'none'}">${state ? sevLabel[state.machine.status] : ''}</span></div>
+        ${a ? `<div class="card ${a.severity}"><b>${esc(a.title)}</b><span class="small muted">${a.severity}, ${Math.round(a.confidence * 100)} % confidence, detected ${clock(a.detectedAt)}</span>
+          <ul class="list">${a.check.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
+          <div class="row">${a.acked ? '<span class="small">Acknowledged</span>' : `<button class="btn go" data-me-ack="${a.id}">Acknowledge</button>`}<a class="btn plain" href="#live">Open live view</a><a class="btn plain" href="#issue-${a.id}">Full record</a></div></div>` : '<p class="empty">No active issue.</p>'}
+        <p class="err"></p></section>
+      <section class="panel"><div class="head"><h2>My work orders</h2><span class="small muted">${mine.length} open</span></div>${mine.map(card).join('') || '<p class="empty">Nothing is assigned to you.</p>'}<p class="err"></p></section>
+      <section class="panel"><div class="head"><h2>Waiting to be taken</h2><span class="small muted">${free.length}</span></div>${free.map(card).join('') || '<p class="empty">No unassigned work orders.</p>'}<p class="err"></p></section>
+      <section class="panel"><h2>Machine QR code</h2>${machineQr()}</section>`;
+    el.onclick = (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.meAck) return act(b, `api/issues/${b.dataset.meAck}/ack`);
+      if (!b.dataset.wo) return;
+      const id = b.dataset.wo, body = {};
+      if (b.dataset.op === 'assign' && $('#wo-who-' + id)) body.user_id = Number($('#wo-who-' + id).value);
+      if (b.dataset.op === 'complete') body.notes = ($('#wo-note-' + id) || {}).value || '';
+      act(b, `api/workorders/${id}/${b.dataset.op}`, body);
+    };
+  }
+
   // ---- work orders and maintenance calendar ---------------------------------
   const WO_STEPS = ['created', 'assigned', 'in_progress', 'completed', 'verified'];
   const WO_NAME = { created: 'Created', assigned: 'Assigned', in_progress: 'In progress', completed: 'Completed', verified: 'Verified' };
@@ -535,7 +569,7 @@
   }
 
   // ---- routing -------------------------------------------------------------
-  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, work: viewWork, risk: viewRisk, sim: viewSim, money: viewMoney, setup: viewSetup };
+  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, me: viewMe, work: viewWork, risk: viewRisk, sim: viewSim, money: viewMoney, setup: viewSetup };
   function route(refreshOnly) {
     if (!ME) return;
     let h = location.hash.slice(1) || 'live', id = null;
