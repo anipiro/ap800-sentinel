@@ -157,3 +157,50 @@ test('ask: unknown questions get the supported list, money needs the manager, an
   for (const q of SUPPORTED) ask(db, q, { model, canMoney: true, now: eng.now() });
   assert.equal(count(), before);
 });
+
+// ---- 5. REST API and webhook -----------------------------------------------------------
+const extapi = require('../src/extapi');
+const { runScenario } = require('../src/sandbox');
+test('REST API: off without a token, needs the right token, read-only, serves issues, losses and KPIs', () => {
+  const { db, eng, run } = rig();
+  run(30); eng.injectFault('jam', U.op); run(30); eng.resolve(eng.active.id, U.tech, { note: 'Cleared' }); run(10);
+  const call = (path, extra = {}) => extapi.handle({ method: 'GET', path, query: {}, authorization: 'Bearer s3cret', token: 's3cret', ...extra }, db, { now: eng.now() });
+  assert.equal(extapi.handle({ method: 'GET', path: '/api/state', token: 's3cret' }, db), null, 'other paths are not handled here');
+  assert.equal(call('/api/v1/issues', { token: '' }).status, 503);
+  assert.equal(call('/api/v1/issues', { authorization: undefined }).status, 401);
+  assert.equal(call('/api/v1/issues', { authorization: 'Bearer wrong!' }).status, 401);
+  assert.equal(call('/api/v1/issues', { authorization: 's3cret' }).status, 401);
+  assert.equal(call('/api/v1/issues', { method: 'POST' }).status, 405);
+  assert.equal(call('/api/v1/nothing').status, 404);
+  const issues = call('/api/v1/issues');
+  assert.equal(issues.status, 200); assert.equal(issues.body.count, 1); assert.equal(issues.body.issues[0].title, 'Exit belt jammed'); assert.equal(issues.body.issues[0].status, 'resolved');
+  assert.match(issues.body.issues[0].detected_at, /^\d{4}-\d\d-\d\dT/); assert.ok(issues.body.issues[0].actual_loss > 0);
+  const losses = call('/api/v1/losses');
+  assert.equal(losses.body.currency, 'GEL'); assert.ok(losses.body.totals.loss > 0); assert.equal(losses.body.by_issue_type[0].type, 'jam');
+  const k = call('/api/v1/kpis', { query: { period: '1h' } });
+  assert.equal(k.status, 200); assert.equal(k.body.period, '1h'); assert.equal(k.body.unplanned_stops, 1); assert.ok(k.body.oee > 0);
+});
+test('webhook: new live issues are posted to the configured address; simulated ones never are', async () => {
+  const { db, eng, run } = rig();
+  const posted = [], fake = async (url, opts) => { posted.push({ url, body: JSON.parse(opts.body), method: opts.method }); return { ok: true, status: 200 }; };
+  const pending = []; eng.onIssue = (id) => pending.push(extapi.notifyIssue(db, id, { fetchImpl: fake, now: eng.now() }));
+  run(30); eng.injectFault('jam', U.op); run(20);
+  await Promise.all(pending);
+  assert.equal(posted.length, 0, 'nothing is posted while no address is set');
+  assert.throws(() => extapi.setWebhook(eng, 'https://example.org/hook', U.tech), /manager/);
+  assert.throws(() => extapi.setWebhook(eng, 'ftp://example.org', U.mgr), /http/);
+  extapi.setWebhook(eng, 'https://example.org/hook', U.mgr);
+  eng.resolve(eng.active.id, U.tech); run(40); eng.injectFault('block', U.op); run(20);
+  await Promise.all(pending);
+  assert.equal(posted.length, 1); assert.equal(posted[0].url, 'https://example.org/hook'); assert.equal(posted[0].method, 'POST');
+  assert.equal(posted[0].body.event, 'issue.created'); assert.equal(posted[0].body.issue.title, 'Filling line blocked'); assert.equal(posted[0].body.issue.severity, 'critical');
+  assert.match(extapi.deliveries(db)[0].status, /delivered \(200\)/);
+  runScenario({ fault: 'jam' }, { model });                                  // sandbox engines have no webhook hook at all
+  await Promise.all(pending); assert.equal(posted.length, 1);
+  const failing = await extapi.notifyIssue(db, eng.active.id, { fetchImpl: async () => { throw new Error('connection refused'); }, now: eng.now() });
+  assert.match(failing.status, /^failed: connection refused/);
+  assert.equal(eng.active.type, 'block', 'a failing webhook does not disturb the issue');
+  extapi.setWebhook(eng, '', U.mgr);
+  assert.equal(await extapi.notifyIssue(db, eng.active.id, { fetchImpl: fake }), null);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action = 'set_webhook'").get().n, 2);
+});

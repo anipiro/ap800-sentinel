@@ -126,6 +126,7 @@ class Sentinel {
     this.event('issue_detected', 'model', `model v${this.modelVersionId ?? 0}`, `${d.title} (${d.severity}, ${Math.round(d.confidence * 100)} % confidence)${extra}${d.note ? '. ' + d.note : ''}${d.sensorNote ? ' ' + d.sensorNote : ''}`, { issueId: id, refTable: 'issues', refId: id, data: { contributions: p.contributions.map((x) => x.text) } });
     this.notifyLevel(1);
     this.planActions(p);
+    if (this.onIssue) { try { this.onIssue(id); } catch (e) { /* an integration must never disturb detection */ } }
     return id;
   }
 

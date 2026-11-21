@@ -18,6 +18,7 @@ const audit = require('./src/audit');
 const monitor = require('./src/monitor');
 const reportgen = require('./src/reportgen');
 const asker = require('./src/ask');
+const extapi = require('./src/extapi');
 const risk = require('./src/risk');
 const { runScenario, crossCheckComparison } = require('./src/sandbox');
 
@@ -29,6 +30,7 @@ const db = open();
 const { model, versionId } = loadOrTrain(db);
 const engine = new Sentinel({ db, model, modelVersionId: versionId, notifiers: [new InAppNotifier(), new TelegramNotifier()], actuator: new MockActuator(), escalateAfterS: Number(process.env.ESCALATE_AFTER_S) || 20 });
 setInterval(() => { try { engine.tick(); } catch (e) { console.error('tick failed:', e); } }, 500);
+engine.onIssue = (id) => { extapi.notifyIssue(db, id).catch((e) => console.error('webhook failed:', e.message)); };
 const makeReport = (period) => reportgen.build(db, { period, model, health: engine.state(engine.seq).machine.health, timeScale: engine.timeScale, target: engine.machine.target_kg_h, assumptions: engine.assumptions() });
 setInterval(() => { try { reportgen.runSchedule(engine, makeReport); } catch (e) { console.error('report schedule failed:', e); } }, 60000);
 
@@ -58,6 +60,8 @@ async function api(req, res, url) {
   let m;
 
   if (p === '/api/health') return send(res, 200, { ok: true });
+  const ext = extapi.handle({ method: req.method, path: p, query: q, authorization: req.headers.authorization }, db, { timeScale: engine.timeScale, target: engine.machine.target_kg_h });
+  if (ext) return send(res, ext.status, ext.body);
   if (p === '/api/people' && GET) return send(res, 200, db.prepare('SELECT id, name, role FROM users ORDER BY id').all());
   if (p === '/api/login' && POST) {
     const body = await readBody(req);
@@ -111,6 +115,8 @@ async function api(req, res, url) {
   if (p === '/api/report' && GET) { engine.need(user, 'manager'); return send(res, 200, { report: makeReport(q.period), sends: reportgen.sends(db) }); }
   if (p === '/api/report.html' && GET) { engine.need(user, 'manager'); const r = makeReport(q.period); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Disposition': `attachment; filename="ap800-${r.period}-report-${new Date(r.to).toISOString().slice(0, 10)}.html"` }); return res.end(reportgen.toHtml(r)); }
   if (p === '/api/report/send' && POST) { engine.need(user, 'manager'); const body = await readBody(req); const id = reportgen.send(engine, makeReport(body.period), user.name); return send(res, 200, { ok: true, id }); }
+  if (p === '/api/integrations' && GET) { engine.need(user, 'manager'); return send(res, 200, { api_enabled: !!process.env.API_TOKEN, endpoints: extapi.ENDPOINTS, webhook_url: extapi.webhookUrl(db), deliveries: extapi.deliveries(db) }); }
+  if (p === '/api/webhook' && POST) { const body = await readBody(req); extapi.setWebhook(engine, body.url, user); return send(res, 200, { ok: true }); }
   if (p === '/api/audit' && GET) { engine.need(user, 'manager'); return send(res, 200, { entries: audit.entries(db, q), counts: audit.counts(db), categories: audit.CATEGORIES }); }
   if (p === '/api/audit.csv' && GET) { engine.need(user, 'manager'); return csv(res, 'ap800-audit.csv', audit.entries(db, { ...q, limit: 5000 }).map((r) => ({ time: new Date(r.ts).toISOString(), category: r.category_label, who: r.who, what: r.what, issue: r.issue_id || '' }))); }
   if (p === '/api/finance' && GET) { engine.need(user, 'manager'); return send(res, 200, reports.finance(db)); }
