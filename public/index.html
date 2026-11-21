@@ -187,7 +187,7 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
     <div class="row"><button class="btn plain" id="mute" aria-pressed="false">Mute alarm</button><button class="btn plain" id="logout">Switch person</button></div>
   </header>
   <nav class="tabs" id="tabs" aria-label="Views">
-    <a href="#live">Live</a><a href="#me">My work</a><a href="#issues">Issues</a><a href="#work">Work orders</a><a href="#history">History</a><a href="#summary">Summary</a><a href="#risk" data-role="technician">Risk</a><a href="#sim" data-role="technician">Simulator</a><a href="#money" data-role="manager">Losses</a><a href="#setup" data-role="manager">Setup</a>
+    <a href="#live">Live</a><a href="#me">My work</a><a href="#issues">Issues</a><a href="#work">Work orders</a><a href="#history">History</a><a href="#summary">Summary</a><a href="#risk" data-role="technician">Risk</a><a href="#sim" data-role="technician">Simulator</a><a href="#money" data-role="manager">Losses</a><a href="#audit" data-role="manager">Audit</a><a href="#setup" data-role="manager">Setup</a>
   </nav>
   <p class="note">Machine signals are simulated and run on a demo clock: one second here counts as one minute of production. Camera analysis runs on real footage of the machine.</p>
 
@@ -252,6 +252,7 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
   <main class="col" id="v-risk" hidden></main>
   <main class="col" id="v-sim" hidden></main>
   <main class="col" id="v-money" hidden></main>
+  <main class="col" id="v-audit" hidden></main>
   <main class="col" id="v-setup" hidden></main>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>

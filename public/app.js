@@ -576,14 +576,27 @@
     };
   }
 
+  // ---- audit log (manager) ----------------------------------------------------
+  let auditQuery = '';
+  async function viewAudit() {
+    const d = await api('api/audit?' + auditQuery), el = $('#v-audit'), q = new URLSearchParams(auditQuery);
+    el.innerHTML = `<section class="panel"><div class="head"><h2>Audit log</h2><a class="btn plain" href="api/audit.csv?${esc(auditQuery)}">Export CSV</a></div>
+        <dl class="kv">${Object.entries(d.categories).map(([k, l]) => `<div><dt>${l}s</dt><dd>${d.counts[k]}</dd></div>`).join('')}</dl>
+        <form class="filters" id="auf"><label>Kind<select id="au-cat" name="category"><option value="">All</option>${Object.entries(d.categories).map(([k, l]) => `<option value="${k}" ${q.get('category') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label>Person or text<input id="au-q" name="q" value="${esc(q.get('q') || '')}"></label><button class="btn">Filter</button></form>
+        ${table(['Time', 'Kind', 'Who', 'What', 'Issue'], d.entries.map((r) => `<tr><td>${stamp(r.ts)}</td><td>${r.category_label}</td><td>${esc(r.who)}</td><td>${esc(r.what)}</td><td>${r.issue_id ? `<a href="#issue-${r.issue_id}">${r.issue_id}</a>` : ''}</td></tr>`))}
+        <p class="note">Built from the append-only history and sign-in records, which the database does not allow to be edited or deleted. Newest first, up to 500 rows.</p></section>`;
+    $('#auf').onsubmit = (e) => { e.preventDefault(); auditQuery = new URLSearchParams([...new FormData(e.target)].filter(([, v]) => v)).toString(); viewAudit(); };
+  }
+
   // ---- routing -------------------------------------------------------------
-  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, me: viewMe, work: viewWork, risk: viewRisk, sim: viewSim, money: viewMoney, setup: viewSetup };
+  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, me: viewMe, work: viewWork, risk: viewRisk, sim: viewSim, money: viewMoney, audit: viewAudit, setup: viewSetup };
   function route(refreshOnly) {
     if (!ME) return;
     let h = location.hash.slice(1) || 'live', id = null;
     const m = /^issue-(\d+)$/.exec(h); if (m) { h = 'issue'; id = m[1]; }
     if (h !== 'issue' && !(h in VIEWS)) h = 'live';
-    if ((h === 'money' || h === 'setup') && !can('manager')) h = 'live';
+    if ((h === 'money' || h === 'setup' || h === 'audit') && !can('manager')) h = 'live';
     if ((h === 'risk' || h === 'sim') && !can('technician')) h = 'live';
     clearInterval(replayTimer); replayTimer = null;
     if (refreshOnly === true && h === 'live') return;

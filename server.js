@@ -14,6 +14,7 @@ const workorders = require('./src/workorders');
 const kpi = require('./src/kpi');
 const kb = require('./src/kb');
 const parts = require('./src/parts');
+const audit = require('./src/audit');
 const risk = require('./src/risk');
 const { runScenario, crossCheckComparison } = require('./src/sandbox');
 
@@ -98,6 +99,8 @@ async function api(req, res, url) {
   if (p === '/api/summary' && GET) return send(res, 200, reports.summary(db, engine.state(engine.seq).machine.health));
   if (p === '/api/issues.csv' && GET) return csv(res, 'ap800-issues.csv', reports.issues(db, { limit: 2000 }).map((i) => ({ ...i, detected_at: new Date(i.detected_at).toISOString(), acked_at: i.acked_at && new Date(i.acked_at).toISOString(), resolved_at: i.resolved_at && new Date(i.resolved_at).toISOString() })));
 
+  if (p === '/api/audit' && GET) { engine.need(user, 'manager'); return send(res, 200, { entries: audit.entries(db, q), counts: audit.counts(db), categories: audit.CATEGORIES }); }
+  if (p === '/api/audit.csv' && GET) { engine.need(user, 'manager'); return csv(res, 'ap800-audit.csv', audit.entries(db, { ...q, limit: 5000 }).map((r) => ({ time: new Date(r.ts).toISOString(), category: r.category_label, who: r.who, what: r.what, issue: r.issue_id || '' }))); }
   if (p === '/api/finance' && GET) { engine.need(user, 'manager'); return send(res, 200, reports.finance(db)); }
   if (p === '/api/settings' && GET) { engine.need(user, 'manager'); return send(res, 200, { settings: Object.fromEntries(db.prepare("SELECT key, value FROM settings WHERE value IN ('0', '1')").all().map((r) => [r.key, r.value === '1'])), unknownThreshold: Number(engine.setting('unknown_threshold')), costs: engine.costs(),
     chain: db.prepare('SELECT r.level, u.name, u.role, u.shift FROM responsibilities r JOIN users u ON u.id = r.user_id ORDER BY r.level, u.id').all(), escalateAfterS: engine.escalateAfterS,
