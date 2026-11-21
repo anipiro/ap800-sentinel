@@ -11,6 +11,7 @@ const { SIG, FAULTS } = require('./src/sim');
 const reports = require('./src/reports');
 const unusual = require('./src/unusual');
 const workorders = require('./src/workorders');
+const kpi = require('./src/kpi');
 const risk = require('./src/risk');
 const { runScenario, crossCheckComparison } = require('./src/sandbox');
 
@@ -82,6 +83,7 @@ async function api(req, res, url) {
     if (m[2] === 'revert') engine.revert(id, user); else engine.decide(id, user, m[2] === 'approve');
     return send(res, 200, { ok: true });
   }
+  if (p === '/api/kpis' && GET) return send(res, 200, kpi.kpis(db, { period: q.period, timeScale: engine.timeScale, target: engine.machine.target_kg_h }));
   if (p === '/api/workorders' && GET) return send(res, 200, { orders: workorders.list(db), peak: workorders.PEAK, people: db.prepare("SELECT id, name FROM users WHERE role IN ('technician','manager') ORDER BY id").all() });
   if ((m = /^\/api\/workorders\/(\d+)\/(assign|start|complete|verify)$/.exec(p)) && POST) { workorders.move(engine, Number(m[1]), user, m[2], await readBody(req)); return send(res, 200, { ok: true }); }
   if (p === '/api/demo/fault' && POST) { const body = await readBody(req); engine.injectFault(body.fault || null, user); return send(res, 200, { ok: true }); }

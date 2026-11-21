@@ -303,9 +303,15 @@
     $('#hf').onsubmit = (e) => { e.preventDefault(); histQuery = new URLSearchParams([...new FormData(e.target)].filter(([, v]) => v)).toString(); viewHistory(); };
   }
 
+  let kpiPeriod = '24h';
   async function viewSummary() {
-    const s = await api('api/summary');
-    $('#v-summary').innerHTML = `<section class="panel"><div class="head"><h2>Summary, ${s.period}</h2><span class="row noprint"><a class="btn plain" href="api/issues.csv">Export CSV</a><button class="btn plain" onclick="window.print()">Print or save as PDF</button></span></div>
+    const s = await api('api/summary'), k = await api('api/kpis?period=' + kpiPeriod);
+    const pc = (x) => (x === null ? 'n/a' : (x * 100).toFixed(1) + ' %'), hrs = (x) => (x === null ? 'n/a' : x + ' h');
+    $('#v-summary').innerHTML = `<section class="panel"><div class="head"><h2>Key figures</h2><label class="row small noprint" for="kpi-period">Period <select id="kpi-period">${[['1h', 'Last hour'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days']].map(([v, l]) => `<option value="${v}" ${v === kpiPeriod ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+        <dl class="kv big"><div><dt>OEE</dt><dd>${pc(k.oee)}</dd></div><div><dt>Availability</dt><dd>${pc(k.availability)}</dd></div><div><dt>Performance</dt><dd>${pc(k.performance)}</dd></div><div><dt>Quality</dt><dd>${pc(k.quality)}</dd></div>
+          <div><dt>Mean time between faults</dt><dd>${hrs(k.mtbf_h)}</dd></div><div><dt>Mean time to repair</dt><dd>${hrs(k.mttr_h)}</dd></div><div><dt>Unplanned stops</dt><dd>${k.unplanned_stops}</dd></div><div><dt>Downtime</dt><dd>${hrs(k.downtime_h)}</dd></div></dl>
+        <p class="note">OEE = availability × performance × quality. Based on ${k.recorded_h} production hours recorded in this period (demo clock), ${k.faults} machine fault${k.faults === 1 ? '' : 's'}, ${k.repairs} repair${k.repairs === 1 ? '' : 's'} by people. A stop is any time output falls below 100 kg/h.</p></section>
+      <section class="panel"><div class="head"><h2>Summary, ${s.period}</h2><span class="row noprint"><a class="btn plain" href="api/issues.csv">Export CSV</a><button class="btn plain" onclick="window.print()">Print or save as PDF</button></span></div>
         <dl class="kv big"><div><dt>Line health now</dt><dd>${s.health} / 100</dd></div><div><dt>Active issues</dt><dd>${s.active}</dd></div><div><dt>Issues detected</dt><dd>${s.issues}</dd></div>
           <div><dt>Fixed by people</dt><dd>${s.resolved_by_people}</dd></div><div><dt>Cleared by themselves</dt><dd>${s.cleared_by_itself}</dd></div>
           <div><dt>Automatic actions</dt><dd>${s.actions_auto}</dd></div><div><dt>Approved by a manager</dt><dd>${s.actions_approved}</dd></div>
@@ -313,6 +319,7 @@
           <div><dt>Losses</dt><dd>${money(s.loss)}</dd></div><div><dt>Saved by early detection</dt><dd>${money(s.savings)}</dd></div></dl></section>
       <section class="panel"><h2>What stands out</h2><ul class="list" style="font-size:1rem;gap:8px">${s.insights.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
         <p class="note">Times use the demo clock. Money figures come from placeholder cost settings.</p></section>`;
+    $('#kpi-period').onchange = (e) => { kpiPeriod = e.target.value; viewSummary(); };
   }
 
   async function viewMoney() {

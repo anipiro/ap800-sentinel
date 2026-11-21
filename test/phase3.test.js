@@ -59,3 +59,24 @@ test('simulations create no work orders on the live machine', () => {
   runScenario({ fault: 'jam' }, { model });
   assert.equal(db.prepare('SELECT COUNT(*) n FROM work_orders').get().n, 0);
 });
+
+// ---- KPIs ---------------------------------------------------------------------
+const { kpis } = require('../src/kpi');
+test('KPIs: healthy running gives full availability; a stop lowers OEE and is counted', () => {
+  const { db, eng, run } = rig();
+  run(120);
+  const now = () => eng.now();
+  let k = kpis(db, { period: '1h', now: now() });
+  assert.equal(k.availability, 1); assert.equal(k.unplanned_stops, 0); assert.equal(k.downtime_h, 0);
+  assert.ok(k.performance > 0.97 && k.performance <= 1); assert.ok(k.quality > 0.97 && k.quality < 1);
+  assert.ok(Math.abs(k.oee - k.availability * k.performance * k.quality) < 0.002);
+  assert.equal(k.mtbf_h, null); assert.equal(k.mttr_h, null);
+  eng.injectFault('jam', U.op); run(60);
+  eng.resolve(eng.active.id, U.tech, { note: 'Belt cleared' }); run(60);
+  k = kpis(db, { period: '1h', now: now() });
+  assert.equal(k.unplanned_stops, 1); assert.ok(k.downtime_h > 0); assert.ok(k.availability < 1); assert.ok(k.oee < 0.95);
+  assert.equal(k.faults, 1); assert.equal(k.repairs, 1); assert.ok(k.mtbf_h > 0); assert.ok(k.mttr_h > 0);
+  assert.ok(Math.abs(k.recorded_h - (k.producing_h + k.downtime_h)) < 0.01);
+  const empty = kpis(db, { period: '1h', now: now() + 5 * 3600000 });
+  assert.equal(empty.oee, null); assert.equal(empty.recorded_h, 0);
+});
