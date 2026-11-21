@@ -135,6 +135,9 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
 .variant{display:flex;flex-direction:column;gap:4px;text-align:left;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:4px}
 .variant b{font-family:var(--display);font-size:1.5rem;font-variant-numeric:tabular-nums}
 .variant[aria-pressed="true"]{border:2px solid var(--sim);background:var(--sim-soft)}
+.verdict{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:4px;border-left:5px solid var(--line);background:var(--bg)}
+.verdict.correct{border-left-color:var(--ok)} .verdict.unknown{border-left-color:var(--warn)} .verdict.misnamed,.verdict.missed{border-left-color:var(--crit)}
+.verdict b{font-family:var(--display)}
 .hist{display:flex;align-items:flex-end;gap:2px;height:150px;border-bottom:1px solid var(--line)}
 .hist i{flex:1;background:var(--sim);border-radius:2px 2px 0 0;min-width:2px}
 .heat td.num{min-width:38px;text-align:center}

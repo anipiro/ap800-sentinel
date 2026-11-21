@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { open } = require('../src/db');
 const { train, IssueDetector } = require('../src/ml/detector');
-const { FAULTS, sample, smooth } = require('../src/sim');
+const { TRAINED, sample, smooth } = require('../src/sim');
 const { Sentinel, Forbidden } = require('../src/core');
 const { MockNotifier, MockActuator } = require('../src/adapters');
 const loss = require('../src/loss');
@@ -42,7 +42,7 @@ test('detector stays quiet on normal running and names every trained fault', () 
   let ew = null, t = 0, falseAlarms = 0;
   for (let i = 0; i < 1500; i++) { ew = smooth(ew, sample((t += 0.5), null, 0)); if (i > 12 && det.predict(1, ew).anomaly) falseAlarms++; }
   assert.ok(falseAlarms <= 8, `too many false alarms: ${falseAlarms}`);
-  for (const f of Object.keys(FAULTS)) {
+  for (const f of TRAINED) {
     let e = null, tt = 0, hit = null;
     for (let i = 0; i < 12; i++) e = smooth(e, sample((tt += 0.5), null, 0));
     for (let i = 0; i < 60; i++) { e = smooth(e, sample((tt += 0.5), f, i * 0.5)); hit = det.predict(1, e); }

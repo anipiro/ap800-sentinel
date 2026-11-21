@@ -4,7 +4,7 @@
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const HIST = 200;
-  let ME = null, SIG = {}, BASE = {}, ALERT_Z = 6, FAULTS = {}, MODEL = null;
+  let ME = null, SIG = {}, BASE = {}, ALERT_Z = 6, FAULTS = {}, SCENARIOS = [], MODEL = null;
   let seq = 0, state = null, muted = false, lastIssueId = null, activeSig = '';
   const ticks = [];   // { v, a }
 
@@ -169,10 +169,10 @@
     if (b.dataset.issue) act(b, `api/issues/${b.dataset.id}/${b.dataset.issue}`, { note: ($('#a-note') || {}).value || '' });
   });
   function renderInbox() {
-    $('#inbox-panel').hidden = !state.inbox.length;
-    $('#inbox').innerHTML = state.inbox.map((n) => `<div class="act"><span><b>${esc(n.title)}</b><br><span class="muted">Sent to you ${clock(n.sent_at)}, escalation level ${n.level}</span></span><button class="btn go" data-id="${n.issue_id}">Acknowledge</button></div>`).join('');
+    $('#inbox-panel').hidden = !state.inbox.length && !state.flagAlerts.length;
+    $('#inbox').innerHTML = state.flagAlerts.map((n) => `<div class="act"><span style="flex:1 1 200px"><b>Unusual activity: ${esc(n.title)}</b><br><span class="muted">${esc(n.explanation)}<br>Escalated to you ${clock(n.sent_at)}</span></span><span class="row"><a class="btn plain" href="#risk">Open Risk</a><button class="btn go" data-alert="${n.id}">Mark as read</button></span></div>`).join('') + state.inbox.map((n) => `<div class="act"><span><b>${esc(n.title)}</b><br><span class="muted">Sent to you ${clock(n.sent_at)}, escalation level ${n.level}</span></span><button class="btn go" data-id="${n.issue_id}">Acknowledge</button></div>`).join('');
   }
-  $('#inbox').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) act(b, `api/issues/${b.dataset.id}/ack`); });
+  $('#inbox').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; if (b.dataset.alert) act(b, `api/flag-alerts/${b.dataset.alert}/read`); else act(b, `api/issues/${b.dataset.id}/ack`); });
 
   // ---- fault injector ------------------------------------------------------
   function buildFaults() {
@@ -322,16 +322,22 @@
   }
 
   async function viewSetup() {
-    const s = await api('api/settings'), m = MODEL.metrics;
+    const s = await api('api/settings'), m = MODEL.metrics, A = await api('api/assumptions');
     const sw = [['automation_enabled', 'Automation', 'When off, nothing runs by itself. Every action waits for a person.'], ['approval_stop_feed', 'Stopping the feed needs manager approval', ''], ['approval_safe_shutdown', 'Shutting the machine down needs manager approval', '']];
     $('#v-setup').innerHTML = `<div class="half"><section class="panel"><h2>Automation and safety</h2>
           ${sw.map(([k, l, h]) => `<div class="switch"><span><b>${l}</b>${h ? `<br><span class="small muted">${h}</span>` : ''}</span><button class="btn" data-key="${k}" data-on="${s.settings[k] ? 1 : 0}" aria-pressed="${s.settings[k]}">${s.settings[k] ? 'On' : 'Off'}</button></div>`).join('')}
           <p class="note">There is no control link to the AP800. Machine commands go to a mock that records them and stops the simulated machine.</p><p class="err"></p></section>
         <section class="panel"><h2>Who is called</h2>${table(['Level', 'Person', 'Role', 'Shift'], s.chain.map((r) => `<tr><td>${r.level}</td><td>${esc(r.name)}</td><td>${r.role}</td><td>${r.shift}</td></tr>`))}
           <p class="note">Level 1 is alerted first, by whoever is on shift (day is 08:00 to 20:00). If nobody acknowledges within ${s.escalateAfterS} s the next level is alerted. Telegram messages are recorded but not sent: no bot token is configured.</p></section></div>
+      <section class="panel"><div class="head"><h2>Projection assumptions</h2><span class="sev medium">assumed, not measured</span></div>
+        <p class="small muted">The Risk tab and the Simulator use these until real history replaces them. Change them to match what you know about the line.</p>
+        <form id="af"><div class="form"><label>Share of events caught early (0 to 1)<input id="as-catch" name="early_catch" type="number" step="0.01" min="0" max="1" value="${A.early_catch}"></label><label>Days since the gearbox bearing was changed<input id="as-age" name="bearing_age_days" type="number" min="0" value="${A.bearing_age_days}"></label></div>
+          ${table(['Problem', 'Events per 30 operating days', 'Minutes from detection to breakdown if nobody acts'], Object.keys(A.rates_30d).map((k) => `<tr><td>${esc(FAULTS[k] || k)}</td><td><input id="as-rate-${k}" name="rate:${k}" type="number" step="any" min="0" value="${A.rates_30d[k]}" aria-label="Events per 30 days, ${esc(FAULTS[k] || k)}" size="6"></td><td>${A.ttf_min[k] !== undefined ? `<input id="as-ttf-${k}" name="ttf:${k}" type="number" min="1" value="${A.ttf_min[k]}" aria-label="Minutes to breakdown, ${esc(FAULTS[k] || k)}" size="6">` : '<span class="muted">no breakdown assumed</span>'}</td></tr>`))}
+          <div class="row" style="margin-top:10px"><button class="btn go">Save assumptions</button></div></form><p class="err"></p></section>
       <section class="panel"><h2>Detection model</h2><dl class="kv"><div><dt>Version</dt><dd>${MODEL.version}</dd></div><div><dt>Trained</dt><dd style="font-size:.9rem">${stamp(Date.parse(MODEL.trained_at))}</dd></div><div><dt>Precision</dt><dd>${(m.precision * 100).toFixed(1)} %</dd></div><div><dt>Recall</dt><dd>${(m.recall * 100).toFixed(1)} %</dd></div><div><dt>False-positive rate</dt><dd>${(m.false_positive_rate * 100).toFixed(2)} %</dd></div><div><dt>Fault type named correctly</dt><dd>${(m.type_accuracy * 100).toFixed(1)} %</dd></div></dl>
         <p class="note">Isolation Forest plus a deviation check, then a nearest-pattern classifier. Measured on ${m.test_samples} synthetic test samples from the simulator, not on a real machine. Forest alone: recall ${(m.forest_only.recall * 100).toFixed(1)} %. Retrain with <code>npm run train</code>.</p></section>
       <section class="panel"><h2>Audit log</h2>${table(['Time', 'Person', 'Action', 'Detail'], s.audit.map((a) => `<tr><td>${stamp(a.ts)}</td><td>${esc(a.name || '')}</td><td>${a.action.replace(/_/g, ' ')}</td><td class="small">${esc(a.detail || '')}</td></tr>`))}</section>`;
+    $('#af').onsubmit = (e) => { e.preventDefault(); const body = { rates_30d: {}, ttf_min: {} }; for (const [k, v] of new FormData(e.target)) { const [g, key] = k.split(':'); if (g === 'rate') body.rates_30d[key] = v; else if (g === 'ttf') body.ttf_min[key] = v; else body[k] = v; } act(e.target.querySelector('button'), 'api/assumptions', body); };
     $('#v-setup').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) act(b, 'api/settings', { key: b.dataset.key, value: b.dataset.on !== '1' }); };
   }
 
@@ -383,13 +389,16 @@
           ${!f.verdict || f.verdict === 'investigate' ? `<span class="row">${f.verdict ? '' : `<button class="btn plain" data-flag="${f.id}" data-v="investigate">Investigate</button>`}<button class="btn plain" data-flag="${f.id}" data-v="expected">Mark as expected</button><button class="btn" data-flag="${f.id}" data-v="escalate">Escalate</button></span>` : ''}</div>`).join('')}</div>`
           : '<p class="empty">Nothing unusual recorded. The monitor watches for frozen sensors, energy use while stopped, running outside scheduled hours, loosened safeguards, repeated overrides and gaps in the data.</p>'}
         <div class="row"><span class="small muted">Demo: test the monitor on the live simulated machine</span>
-          <button class="btn plain" data-quirk="freeze" aria-pressed="${d.quirk === 'freeze'}">Freeze the pressure sensor</button>
-          <button class="btn plain" data-quirk="idle_draw" aria-pressed="${d.quirk === 'idle_draw'}">Pump keeps drawing power when stopped</button>
+          ${[['freeze', 'Freeze the pressure sensor'], ['spike', 'Temperature sensor reads 180 °C'], ['idle_draw', 'Pump keeps drawing power when stopped'], ['night', 'Treat the time as 23:30'], ['overrides', 'Count three extra overrides']].map(([k, l]) => `<button class="btn plain" data-quirk="${k}" aria-pressed="${d.quirk === k}">${l}</button>`).join('')}
           <button class="btn plain" data-quirk="">Switch tests off</button></div>
-        <p class="note">Open flags: ${open.length}. A frozen sensor takes about 15 seconds to be flagged. The power test only shows while the machine is stopped.</p><p class="err"></p></section>
+        <p class="note">Open flags: ${open.length}. One test runs at a time. A frozen sensor takes about 15 seconds to be flagged; the others take a second or two. The power test only shows while the machine is stopped. A flag that has been given a verdict is not raised again for 24 hours.</p><p class="err"></p></section>
       <section class="panel sim"><div class="head"><h2>Projected losses</h2><span class="simtag">PROJECTION from ${p.runs} simulated futures</span></div>
         ${table(['Next', '#Chance of a failure nobody catches', '#Expected loss', '#Likely range (5th to 95th percentile)', '#Expected loss without monitoring'], p.horizons.map((h) => `<tr><td>${h.days} days</td><td class="num">${pct(h.p_failure)}</td><td class="num">${money(h.expected_loss)}</td><td class="num">${money(h.p5)} to ${money(h.p95)}</td><td class="num">${money(h.expected_loss_without_monitoring)}</td></tr>`))}
-        <p class="note">${esc(p.assumptions)}</p></section>
+        <p class="note">These figures come from the assumed values below, not from measured failure data.</p></section>
+      <section class="panel"><div class="head"><h2>Assumed values behind the projection</h2><span class="row"><span class="sev medium">assumed</span>${can('manager') ? '<a class="btn plain" href="#setup">Edit on the Setup page</a>' : '<span class="small muted">The manager edits these on the Setup page</span>'}</span></div>
+        <dl class="kv"><div><dt>Events caught early</dt><dd>${pct(p.assumed.early_catch)} <span class="sev medium">assumed</span></dd></div><div><dt>Days since the gearbox bearing was changed</dt><dd>${p.assumed.bearing_age_days} <span class="sev medium">assumed</span></dd></div><div><dt>Real history blended in</dt><dd>${p.assumed.history_issues} issues over ${p.assumed.history_days} operating days</dd></div></dl>
+        ${table(['Problem', '#Events per 30 operating days (assumed)', '#Minutes from detection to breakdown if nobody acts (assumed)'], Object.keys(p.assumed.rates_30d).map((k) => `<tr><td>${esc(FAULTS[k] || k)}</td><td class="num">${p.assumed.rates_30d[k]}</td><td class="num">${d.assumptions.ttf_min[k] ?? 'no breakdown assumed'}</td></tr>`))}
+        <p class="note">Rates start from these values and move toward the recorded history as real issues accumulate.</p></section>
       <div class="half"><section class="panel sim"><div class="head"><h2>Risk ranking, next 30 days</h2><span class="simtag">PROJECTION</span></div>
           ${table(['Risk', 'Station', '#Expected events', '#Chance of at least one', '#Expected loss', '#Cost if missed'], p.ranking.map((r) => `<tr><td>${esc(r.label)}</td><td>${esc((STATIONS.find((s) => s.id === r.station) || {}).name || '')}</td><td class="num">${r.events_30d}</td><td class="num">${pct(r.p_event_30d)}</td><td class="num">${money(r.expected_loss_30d)}</td><td class="num">${money(r.cost_if_missed)}</td></tr>`))}</section>
         <section class="panel sim"><div class="head"><h2>Loss distribution, next 30 days</h2><span class="simtag">PROJECTION</span></div>
@@ -413,11 +422,14 @@
     if (!simResult) { box.innerHTML = '<p class="empty">Choose a scenario and run it. The run happens in a sandbox: it cannot alert real people, stop the machine or appear in the real history.</p>'; return; }
     const r = simResult, names = { early: 'Caught early', late: 'Caught late', never: 'Nobody acts' }, v = r[simVariant], e = r.early;
     box.innerHTML = `<div class="head"><h2>Run ${r.id}: ${esc(r.scenario)}</h2><span class="simtag">SIMULATED, not real data</span></div>
-      <p>${e.detected ? `The model detected it <b>${e.detectMin} min</b> after it started, named it "${esc(e.label)}" (${e.severity}) with ${Math.round(e.confidence * 100)} % confidence.` : '<b>The model did not detect this scenario.</b> At this severity the readings stay inside the normal band.'}</p>
+      <p class="small muted">${r.trained ? 'The model was trained on this fault.' : 'The model was <b>not trained</b> on this scenario.'}${r.truth ? ' What is really happening: ' + esc(r.truth) : ''}</p>
+      <div class="verdict ${v.outcome}"><b>${{ correct: 'Handled correctly', unknown: 'Seen, but not understood', misnamed: 'Wrong diagnosis', missed: 'Missed by the fault model' }[v.outcome]}</b><span>${esc(v.handling)}</span></div>
+      <p>${v.detected ? `The fault model raised an issue <b>${v.detectMin} min</b> after it started: "${esc(v.label)}" (${v.severity}), ${Math.round(v.confidence * 100)} % confidence.` : '<b>The fault model raised no issue.</b>'}</p>
       <div class="three">${['early', 'late', 'never'].map((k) => `<button class="variant" data-variant="${k}" aria-pressed="${k === simVariant}"><span class="small muted">${names[k]}${r[k].delayMin !== null && r[k].delayMin !== undefined ? `, response after ${r[k].delayMin} min` : ''}</span><b>${money(r[k].loss)}</b><span class="small">${esc(r[k].note)}</span></button>`).join('')}</div>
       <div class="half"><div><h3>Who would be alerted (${names[simVariant].toLowerCase()})</h3>${table(['Minute', 'Person', 'Channel', 'Level'], v.notified.map((n) => `<tr><td class="num">${Math.floor(n.m)}</td><td>${esc(n.name)}</td><td>${n.channel.replace('_', '-')}</td><td>${n.level}</td></tr>`))}</div>
         <div><h3>What the system would do</h3>${table(['Action', 'Outcome'], v.actions.map((a) => `<tr><td>${esc(a.label)}</td><td>${a.status === 'done' ? (a.risk === 'physical' ? 'Run after manager approval' : 'Run automatically') : a.status === 'pending_approval' ? 'Still waiting for approval' : a.status.replace('_', ' ')}</td></tr>`))}
           <p class="note">Downtime ${v.downtimeMin ?? 'n/a'} min, scrap ${v.scrapKg ?? 'n/a'} kg, escalations ${v.escalations}. ${v.mockMessages} alerts and ${v.mockCommands} machine commands went to sandbox mocks only.</p></div></div>
+      <h3>What the activity monitor flagged</h3>${table(['Minute', 'Flag', 'Why'], v.flags.map((f) => `<tr><td class="num">${Math.floor(f.m)}</td><td>${esc(f.title)}</td><td class="small">${esc(f.explanation)}</td></tr>`))}
       <h3>Replay, ${names[simVariant].toLowerCase()}</h3><div id="sim-replay"></div>`;
     mountReplay($('#sim-replay'), v, true);
   }
@@ -425,7 +437,7 @@
     const runs = await api('api/sim/runs'), el = $('#v-sim');
     const hours = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === 10 ? 'selected' : ''}>${String(h).padStart(2, '0')}:00${h >= 8 && h < 20 ? ' (day shift)' : ' (night shift)'}</option>`).join('');
     el.innerHTML = `<section class="panel"><div class="head"><h2>What could go wrong</h2><span class="small muted">Sandbox, separate from the live machine</span></div>
-        <form class="form" id="sf"><label>Scenario<select id="sf-fault" name="fault">${Object.entries(FAULTS).map(([k, n]) => `<option value="${k}" ${k === 'bearing' ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+        <form class="form" id="sf"><label>Scenario<select id="sf-fault" name="fault"><optgroup label="Faults the model was trained on">${SCENARIOS.filter((s) => s.trained).map((s) => `<option value="${s.key}" ${s.key === 'bearing' ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</optgroup><optgroup label="Not in the training data">${SCENARIOS.filter((s) => !s.trained).map((s) => `<option value="${s.key}">${esc(s.name)}</option>`).join('')}</optgroup></select></label>
           <label>How severe (1 = typical)<input id="sf-sev" name="severity" type="number" min="0.2" max="2" step="0.1" value="1"></label>
           <label>How fast it develops (1 = typical)<input id="sf-speed" name="speed" type="number" min="0.25" max="4" step="0.25" value="1"></label>
           <label>Time of day<select id="sf-hour" name="startHour">${hours}</select></label>
@@ -435,7 +447,7 @@
           <div class="row" style="align-items:end"><button class="btn go">Run scenario</button></div></form><p class="err"></p></section>
       <section class="panel sim" id="sim-out"></section>
       <section class="panel sim"><div class="head"><h2>Stored runs</h2><span class="row"><span class="simtag">SIMULATED</span><a class="btn plain" href="api/sim/runs.csv">Export CSV</a></span></div>
-        ${table(['Run', 'When', 'By', 'Scenario', 'Settings', '#Detected after', '#Caught early', '#Caught late', '#Nobody acts'], runs.map((r) => `<tr class="click" data-run="${r.id}"><td>${r.id}</td><td>${stamp(r.created_at)}</td><td>${esc((r.created_by || '').replace(/ \(.*/, ''))}</td><td>${esc(r.scenario)}</td>
+        ${table(['Run', 'When', 'By', 'Scenario', 'Settings', '#Detected after', '#Caught early', '#Caught late', '#Nobody acts'], runs.map((r) => `<tr class="click" data-run="${r.id}"><td>${r.id}</td><td>${stamp(r.created_at)}</td><td>${esc((r.created_by || '').replace(/ \(.*/, ''))}</td><td>${esc(r.scenario)}${(SCENARIOS.find((s) => s.name === r.scenario) || {}).trained === false ? ' <span class="sev medium">untrained</span>' : ''}</td>
           <td class="small">severity ${r.params.severity}, speed ${r.params.speed}, ${String(r.params.startHour).padStart(2, '0')}:00${r.params.peak ? ', peak' : ''}, response ${r.params.responseMin} min, late +${r.params.lateMin} min</td>
           <td class="num">${r.detect_min === null ? 'not detected' : r.detect_min + ' min'}</td><td class="num">${money(r.loss_early)}</td><td class="num">${money(r.loss_late)}</td><td class="num">${money(r.loss_never)}</td></tr>`))}
         <p class="note">Select a row to load that run and compare. Stored runs are kept apart from the real issue list and history.</p></section>`;
@@ -472,7 +484,7 @@
 
   async function start() {
     let me; try { me = await api('api/me'); } catch (e) { return; }
-    ME = me.user; SIG = me.signals; BASE = me.baseline; ALERT_Z = me.alertZ; FAULTS = me.faults; MODEL = me.model;
+    ME = me.user; SIG = me.signals; BASE = me.baseline; ALERT_Z = me.alertZ; FAULTS = me.faults; SCENARIOS = me.scenarios; MODEL = me.model;
     $('#login').hidden = true; $('#app').hidden = false;
     $('#s-user').textContent = ME.name.replace(/ \(.*/, '') + ', ' + ME.role;
     document.querySelectorAll('#tabs a[data-role]').forEach((a) => { a.hidden = !can(a.dataset.role); });

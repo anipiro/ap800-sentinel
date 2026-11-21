@@ -65,7 +65,7 @@ async function api(req, res, url) {
   }
 
   if (!user) return send(res, 401, { error: 'Sign in first' });
-  if (p === '/api/me') return send(res, 200, { user, signals: SIG, faults: Object.fromEntries(Object.entries(FAULTS).map(([k, f]) => [k, f.name])), model: { version: versionId, trained_at: model.trainedAt, metrics: model.metrics }, baseline: model.base, alertZ: 6, timeScale: engine.timeScale });
+  if (p === '/api/me') return send(res, 200, { user, signals: SIG, faults: Object.fromEntries(Object.entries(FAULTS).filter(([, f]) => !f.untrained).map(([k, f]) => [k, f.name])), scenarios: Object.entries(FAULTS).map(([k, f]) => ({ key: k, name: f.name, trained: !f.untrained })), model: { version: versionId, trained_at: model.trainedAt, metrics: model.metrics }, baseline: model.base, alertZ: 6, timeScale: engine.timeScale });
   if (p === '/api/logout' && POST) { const c = /sid=([a-f0-9]+)/.exec(req.headers.cookie || ''); if (c) sessions.delete(c[1]); return send(res, 200, {}, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' }); }
   if (p === '/api/state' && GET) return send(res, 200, { ...engine.state(Number(q.since) || 0, user), phone: { hist: phone.hist, live: Date.now() - phone.last < 5000 } });
 
@@ -98,7 +98,7 @@ async function api(req, res, url) {
   // ---- Phase 2: sandbox simulator, risk projection, unusual activity ----------
   if (p === '/api/sim/run' && POST) {
     engine.need(user, 'technician');
-    const result = runScenario(await readBody(req), { model, modelVersionId: versionId, costs: engine.costs() });   // isolated: own database, mock notifiers, mock actuator
+    const result = runScenario(await readBody(req), { model, modelVersionId: versionId, costs: engine.costs(), ttfMin: engine.assumptions().ttf_min });   // isolated: own database, mock notifiers, mock actuator
     const id = Number(db.prepare('INSERT INTO simulations (created_at, created_by, scenario, params, detect_min, loss_early, loss_late, loss_never, result) VALUES (?,?,?,?,?,?,?,?,?)')
       .run(Date.now(), user.name, result.scenario, JSON.stringify(result.params), result.early.detectMin, result.early.loss, result.late.loss, result.never.loss, JSON.stringify(result)).lastInsertRowid);
     return send(res, 200, { id, ...result });
@@ -111,9 +111,12 @@ async function api(req, res, url) {
     engine.need(user, 'technician');
     const act = engine.active ? db.prepare('SELECT id, type, fail_prob, projected_loss, rul_min, severity FROM issues WHERE id = ?').get(engine.active.id) : null;
     const prof = reports.profile(db, engine.timeScale);
-    return send(res, 200, { projection: risk.project(db, model, { runtimeDays: prof.runtime_h / 16, active: act }), active: act && { ...act, title: engine.state(engine.seq).active.title, rul_min: engine.active.rul }, flags: unusual.list(db), quirk: engine.quirk, stopped: engine.stopped });
+    return send(res, 200, { projection: risk.project(db, model, { runtimeDays: prof.runtime_h / 16, active: act, assumptions: engine.assumptions() }), assumptions: engine.assumptions(), active: act && { ...act, title: engine.state(engine.seq).active.title, rul_min: engine.active.rul }, flags: unusual.list(db), quirk: engine.quirk, stopped: engine.stopped });
   }
   if ((m = /^\/api\/flags\/(\d+)\/verdict$/.exec(p)) && POST) { const body = await readBody(req); unusual.verdict(engine, Number(m[1]), user, String(body.verdict)); return send(res, 200, { ok: true }); }
+  if (p === '/api/assumptions' && GET) { engine.need(user, 'technician'); return send(res, 200, engine.assumptions()); }
+  if (p === '/api/assumptions' && POST) return send(res, 200, engine.setAssumptions(await readBody(req), user));
+  if ((m = /^\/api\/flag-alerts\/(\d+)\/read$/.exec(p)) && POST) { unusual.markAlertRead(engine, Number(m[1]), user); return send(res, 200, { ok: true }); }
   if (p === '/api/demo/quirk' && POST) { const body = await readBody(req); engine.setQuirk(body.quirk || null, user); return send(res, 200, { ok: true }); }
 
   return send(res, 404, { error: 'Not found' });

@@ -13,7 +13,7 @@ Open http://localhost:4800 and choose a person to sign in as. Needs Node 22.13 o
 | Command | What it does |
 |---|---|
 | `npm start` | Runs the website, the simulated machine and the detection engine |
-| `npm test` | Runs the test suite (22 tests) |
+| `npm test` | Runs the test suite (33 tests) |
 | `npm run train` | Retrains the detection model on fresh synthetic data. Restart the server afterwards |
 | `npm run reset` | Deletes the database so the next start is clean |
 
@@ -61,8 +61,10 @@ Model metrics are measured on synthetic test data from the same simulator. They 
 ## Simulations and risk (Phase 2)
 
 - **Simulator tab** (technician and manager): pick a scenario, severity, speed, time of day and response delay. The run happens in a sandbox with its own in-memory database, mock notifiers and a mock actuator. It shows time to detection, who would be alerted, what would run, and the loss if caught early, caught late, or not acted on. Runs are stored in the `simulations` table only and can be replayed and exported.
+- **Untrained scenarios**: pressure sensor freezing, dropping out or drifting, a power surge, and a gradual performance drop are in the simulator but not in the model's training data. Each result states plainly whether the model handled it correctly, saw it without understanding it, named the wrong fault, or missed it. On the current model: frozen sensor is missed by the fault model and caught by the activity monitor; drop-out and drift are named as filling faults, which is wrong; a surge is seen as an unclassified anomaly; a performance drop is detected after about an hour and named wrongly.
 - **Risk tab**: Monte Carlo projection for 7, 30 and 90 days (2,000 random futures), risk ranking, heatmap and loss distribution. Event rates are placeholders that blend with recorded issue history.
-- **Unusual activity**: frozen sensor, energy use while stopped, running outside 06:00 to 22:00, a safeguard switched off, three or more rejected or undone actions in a day, a gap in the data. Each flag can be marked expected, investigated or escalated. Use the two test buttons on the Risk tab to trigger the first two.
+- **Unusual activity**: frozen sensor, physically impossible readings (outside the sensor range, or changing faster than the quantity can), energy use while stopped, running outside 06:00 to 22:00, a safeguard switched off, three or more rejected or undone actions in a day, a gap in the data. Each flag can be marked expected, investigated or escalated. Every check has a test button on the Risk tab except the data gap, which appears after a server restart, and the safeguard change, which you trigger on the Setup page. Out-of-range readings are hidden from the fault model. Escalated flags land in the manager's inbox on the Live tab.
+- **Assumptions**: event rates, minutes to breakdown, the early-catch rate and bearing age are editable by the manager on the Setup page and labelled "assumed" on the Risk tab.
 - Everything simulated or projected is drawn with a dashed violet border and a SIMULATED or PROJECTION tag.
 
 ## Layout

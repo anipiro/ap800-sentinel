@@ -1,7 +1,7 @@
 // Issue detection: Isolation Forest + deviation check for "is something wrong",
 // nearest-centroid classifier for "what is it", per-signal deviation for "why".
 // All training data is synthetic (src/sim.js). Metrics describe the simulator, not a real machine.
-const { SIG, KEYS, FAULTS, sample, smooth } = require('../sim');
+const { SIG, KEYS, TRAINED, sample, smooth } = require('../sim');
 const iforest = require('./iforest');
 
 const DT = 0.5, CLIP = 40, Z_ALERT = 6;
@@ -31,7 +31,7 @@ function train() {
 
   // fault examples: used as contamination for the forest and as class centroids
   const centroids = {}, Xf = [];
-  for (const f of Object.keys(FAULTS)) {
+  for (const f of TRAINED) {
     const early = [], late = [];
     for (let run = 0; run < 6; run++) for (const s of sequence(f, 140)) {
       if (s.age < GRACE[f]) continue;
@@ -55,7 +55,7 @@ function evaluate(model) {
   const det = new IssueDetector(model);
   let tp = 0, fp = 0, tn = 0, fn = 0, tpIf = 0, fpIf = 0, typed = 0;
   for (const s of sequence(null, 3000)) { const p = det.predict(1, s.v); p.anomaly ? fp++ : tn++; if (p.forestHit) fpIf++; }
-  for (const f of Object.keys(FAULTS)) for (let run = 0; run < 3; run++) for (const s of sequence(f, 140)) {
+  for (const f of TRAINED) for (let run = 0; run < 3; run++) for (const s of sequence(f, 140)) {
     if (s.age < GRACE[f]) continue;
     const p = det.predict(1, s.v);
     if (p.anomaly) { tp++; if (p.type === f) typed++; } else fn++;

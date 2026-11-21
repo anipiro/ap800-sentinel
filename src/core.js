@@ -39,9 +39,13 @@ class Sentinel {
   // ---- one simulator step --------------------------------------------------
   tick() {
     this.t += DT; this.tickNo++;
-    this.ew = smooth(this.ew, sample(this.t, this.fault, (this.t - this.faultAt) * this.faultSpeed, this.stopped, this.faultSev));
+    this.prevRaw = this.raw;
+    this.raw = sample(this.t, this.fault, (this.t - this.faultAt) * this.faultSpeed, this.stopped, this.faultSev);
+    this.ew = smooth(this.ew, this.raw);
     unusual.applyQuirk(this);
-    const p = this.stopped || this.cooldown > 0 ? { anomaly: false, score: 0, z: {}, contributions: [], maxAbsZ: 0 } : this.detector.predict(this.machineId, this.ew);
+    unusual.everyTick(this);
+    // readings outside the sensor's physical range are not shown to the fault model
+    const p = this.stopped || this.cooldown > 0 ? { anomaly: false, score: 0, z: {}, contributions: [], maxAbsZ: 0 } : this.detector.predict(this.machineId, unusual.maskImplausible(this));
     if (this.cooldown > 0) this.cooldown--;
     this.last = p;
     const v = {}; KEYS.forEach((k) => { v[k] = +this.ew[k].toFixed(SIG[k].dp + 1); });
@@ -245,15 +249,31 @@ class Sentinel {
 
   injectFault(fault, user) {
     this.need(user, 'operator');
-    if (fault && !FAULTS[fault]) throw new BadRequest('Unknown fault');
+    if (fault && (!FAULTS[fault] || FAULTS[fault].untrained)) throw new BadRequest('Unknown fault');
     this.fault = fault || null; this.faultAt = this.t; this.faultSpeed = 1; this.faultSev = 1;
     this.event('demo_fault', 'user', user.name, fault ? `Demo: "${FAULTS[fault].name}" played into the simulated machine` : 'Demo: simulated machine set back to normal');
+  }
+
+  // Assumed values behind the risk projection and the simulator.
+  assumptions() { return JSON.parse(this.setting('assumptions')); }
+  setAssumptions(body, user) {
+    this.need(user, 'manager');
+    const cur = this.assumptions(), next = { rates_30d: {}, ttf_min: {} };
+    const num = (v, old, lo, hi) => { const n = Number(v); return v !== '' && v !== null && v !== undefined && Number.isFinite(n) && n >= lo && n <= hi ? n : old; };
+    for (const k of Object.keys(cur.rates_30d)) next.rates_30d[k] = num((body.rates_30d || {})[k], cur.rates_30d[k], 0, 1000);
+    for (const k of Object.keys(cur.ttf_min)) next.ttf_min[k] = num((body.ttf_min || {})[k], cur.ttf_min[k], 1, 100000);
+    next.early_catch = num(body.early_catch, cur.early_catch, 0, 1);
+    next.bearing_age_days = num(body.bearing_age_days, cur.bearing_age_days, 0, 100000);
+    this.db.prepare("UPDATE settings SET value = ? WHERE key = 'assumptions'").run(JSON.stringify(next));
+    this.event('config_changed', 'user', user.name, `${user.name} changed the projection assumptions`, { data: { from: cur, to: next } });
+    this.audit(user, 'set_assumptions', next);
+    return next;
   }
 
   // Demo control for unusual activity: freeze the pressure sensor, or leave the pump drawing power while stopped.
   setQuirk(quirk, user) {
     this.need(user, 'operator');
-    if (quirk && !['freeze', 'idle_draw'].includes(quirk)) throw new BadRequest('Unknown test');
+    if (quirk && !unusual.QUIRKS.includes(quirk)) throw new BadRequest('Unknown test');
     this.quirk = quirk || null;
     this.event('demo_fault', 'user', user.name, quirk ? `Demo: unusual-activity test "${quirk}" switched on` : 'Demo: unusual-activity test switched off');
   }
@@ -266,7 +286,7 @@ class Sentinel {
     const out = {
       seq: this.seq, ticks: this.ring.filter((r) => r.seq > since),
       machine: { id: this.machineId, name: this.machine.name, model: this.machine.model, target: this.machine.target_kg_h, stopped: this.stopped, fault: this.fault, quirk: this.quirk, health, status: this.stopped ? 'stopped' : a ? a.severity : 'ok' },
-      z: p.z, automation: this.setting('automation_enabled') === '1', escalateAfterS: this.escalateAfterS, active: null, actions: [], inbox: [],
+      z: p.z, automation: this.setting('automation_enabled') === '1', escalateAfterS: this.escalateAfterS, active: null, actions: [], inbox: [], flagAlerts: [],
     };
     if (a) {
       const T = TYPES[a.type] || TYPES.unknown;
@@ -274,6 +294,7 @@ class Sentinel {
         detectedAt: a.detectedAt, acked: a.acked, level: a.level, rul: a.rul, loss: this.liveLoss(a), contributions: (this.last && this.last.contributions.length ? this.last.contributions : []).map((x) => x.text) };
       out.actions = this.db.prepare('SELECT id, kind, risk, status, reason FROM actions WHERE issue_id = ? ORDER BY id').all(a.id).map((x) => ({ ...x, label: ACTIONS[x.kind].label, reversible: ACTIONS[x.kind].reversible }));
     }
+    if (user) out.flagAlerts = this.db.prepare("SELECT a.id, a.flag_id, a.sent_at, f.title, f.explanation, f.severity FROM flag_alerts a JOIN unusual_flags f ON f.id = a.flag_id WHERE a.user_id = ? AND a.channel = 'in_app' AND a.read_at IS NULL ORDER BY a.id DESC LIMIT 5").all(user.id);
     if (user) out.inbox = this.db.prepare("SELECT n.id, n.issue_id, n.level, n.sent_at, i.type, i.severity FROM notifications n JOIN issues i ON i.id = n.issue_id WHERE n.user_id = ? AND n.channel = 'in_app' AND n.acked_at IS NULL AND i.status = 'detected' ORDER BY n.id DESC LIMIT 5").all(user.id)
       .map((n) => ({ ...n, title: (TYPES[n.type] || TYPES.unknown).title }));
     return out;

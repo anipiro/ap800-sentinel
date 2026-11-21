@@ -10,11 +10,19 @@ const loss = require('./loss');
 
 const WARMUP = 20;          // ticks of normal running before the fault starts
 const TICKS_PER_MIN = 2;    // demo clock: one tick is half a minute
+const DT_H = 0.5 / 60;      // hours of production per tick
 const REC = KEYS.filter((k) => k !== 'motion');
-// Assumed minutes from detection until the fault turns into a breakdown if nobody acts (placeholder values).
-const TTF_MIN = { bearing: 60, wrap: 30, block: 45, jam: 20 };
+const DEFAULT_TTF = { bearing: 60, wrap: 30, block: 45, jam: 20 };   // assumed minutes from detection to breakdown if nobody acts
+// What it costs if a scenario the model was not trained on is never dealt with (placeholder figures).
+const UNTRAINED_COST = {
+  sensor_frozen:  { downtime_h: 0.25, repair_h: 1, parts: 350 },
+  sensor_dropout: { downtime_h: 0.25, repair_h: 1, parts: 350 },
+  sensor_drift:   { downtime_h: 0.25, repair_h: 1, parts: 350 },
+  power_surge:    { downtime_h: 3, repair_h: 2, parts: 1500 },
+  perf_drop:      { downtime_h: 0, repair_h: 2, parts: 200 },
+};
 
-function runOne({ model, modelVersionId, costs, fault, severity, speed, startHour, peak, delayMin }) {
+function runOne({ model, modelVersionId, costs, ttfMin, fault, severity, speed, startHour, peak, delayMin }) {
   const db = open(':memory:');
   costs = costs || db.prepare('SELECT * FROM cost_params WHERE machine_id = 1').get();
   db.prepare('UPDATE cost_params SET production_value_h = ?, idle_labour_h = ?, repair_labour_h = ?, scrap_kg = ?, energy_kwh = ? WHERE machine_id = 1')
@@ -24,16 +32,19 @@ function runOne({ model, modelVersionId, costs, fault, severity, speed, startHou
   const notifiers = [new MockNotifier('in_app'), new MockNotifier('telegram')], actuator = new MockActuator();
   const eng = new Sentinel({ db, model, modelVersionId, notifiers, actuator, escalateAfterS: 20, simulated: true, now: () => clock });
   const tech = eng.onDuty(1)[0], mgr = db.prepare("SELECT * FROM users WHERE role = 'manager'").get();
-  const T0 = TYPES[fault];
-  const points = [];
-  const ttf = TTF_MIN[fault] ? TTF_MIN[fault] / speed : null, tooLate = delayMin !== null && ttf !== null && delayMin > ttf;
+  const F = FAULTS[fault], trained = !F.untrained;
+  const ttfBase = (ttfMin || DEFAULT_TTF)[fault];
+  const ttf = ttfBase ? ttfBase / speed : null, tooLate = delayMin !== null && ttf !== null && delayMin > ttf;
   if (tooLate) delayMin = null;
+  const points = [], target = eng.machine.target_kg_h, baseDefect = model.base.defect.mean;
   let det = null, issueId = null, responded = false, resolved = false, repairUntil = 0, endAt = Infinity, lastLoss = 0, injectClock = 0;
+  let shadowDown = 0, shadowScrap = 0;   // lost output and scrap whether or not anything was detected
 
   for (let i = 0; i < 2600; i++) {
     clock += 500;
     if (i === WARMUP) { eng.fault = fault; eng.faultAt = eng.t; eng.faultSpeed = speed; eng.faultSev = severity; injectClock = clock; }
     eng.tick();
+    if (i >= WARMUP && eng.ew) { shadowDown += Math.max(0, 1 - Math.min(1, eng.ew.rate / target)) * DT_H; shadowScrap += eng.ew.rate * DT_H * Math.max(0, eng.ew.defect - baseDefect) / 100; }
     if (det === null && eng.active) { det = i; issueId = eng.active.id; }
     if (det !== null && !eng.active && !resolved) { resolved = true; endAt = i + 20; }                    // cleared by itself
     if (delayMin !== null && det !== null && !responded && i >= det + delayMin * TICKS_PER_MIN && eng.active) {
@@ -47,22 +58,35 @@ function runOne({ model, modelVersionId, costs, fault, severity, speed, startHou
     if (i % 2 === 0 && eng.ew) { const v = {}; REC.forEach((k) => { v[k] = +eng.ew[k].toFixed(SIG[k].dp + 1); }); points.push({ m: (i - WARMUP) / TICKS_PER_MIN, v, a: eng.last.anomaly ? 1 : 0, loss: Math.round(lastLoss) }); }
     if (i >= endAt) break;
     if (delayMin === null && det !== null && i >= det + (tooLate ? ttf : 90) * TICKS_PER_MIN) break;      // nobody responds: watch 90 minutes
-    if (det === null && i >= WARMUP + 120 * TICKS_PER_MIN) break;                        // never detected
+    if (det === null && i >= WARMUP + 120 * TICKS_PER_MIN) break;                                          // never detected: watch two hours
   }
 
   const c = eng.costs(), minute = (ts) => +(((ts - injectClock) / 1000)).toFixed(1);     // demo clock: 1 s = 1 min
   const issue = issueId ? db.prepare('SELECT * FROM issues WHERE id = ?').get(issueId) : null;
-  const T = issue ? (TYPES[issue.type] || TYPES.unknown) : T0;
+  const T = issue ? (TYPES[issue.type] || TYPES.unknown) : null;
+  const missedCost = trained ? loss.eventCost(TYPES[fault].failure, c) : loss.eventCost(UNTRAINED_COST[fault], c);
+  const flags = db.prepare('SELECT ts, kind, title, explanation FROM unusual_flags ORDER BY id').all().map((f) => ({ m: minute(f.ts), kind: f.kind, title: f.title, explanation: f.explanation }));
+
   let total, note;
-  if (!issue) { total = loss.eventCost(T0.failure, c); note = 'The model did not detect this scenario, so it runs to failure.'; }
+  if (!issue) { total = loss.round2(loss.actualLoss({ downtime_h: shadowDown, scrap_kg: shadowScrap }, c).total + missedCost); note = 'The fault model raised no issue, so nobody is alerted. The loss is what accrued over two hours plus the assumed cost of dealing with it later.'; }
   else if (issue.resolved_at && issue.resolved_by !== 'system') { total = issue.actual_loss; note = `Repaired after a response delay of ${delayMin} min.`; }
-  else if (issue.resolved_at) { total = issue.actual_loss; note = 'The readings returned to normal by themselves.'; }
-  else { total = loss.round2(issue.actual_loss + loss.eventCost(T.failure, c)); note = tooLate ? `The response would come after the assumed ${Math.round(ttf)} min to breakdown, so the machine fails first.` : 'Nobody responds. The loss is what accrued while it ran on plus the cost of the eventual failure.'; }
+  else if (issue.resolved_at) { total = issue.actual_loss; note = 'The readings returned to normal by themselves before anyone acted.'; }
+  else { total = loss.round2(issue.actual_loss + (trained ? loss.eventCost(T.failure, c) : missedCost)); note = tooLate ? `The response would come after the assumed ${Math.round(ttf)} min to breakdown, so the machine fails first.` : 'Nobody responds. The loss is what accrued while it ran on plus the cost of the eventual failure.'; }
+
+  // Plain statement of how the model coped with this scenario.
+  let handling, outcome;
+  if (!issue) { outcome = 'missed'; handling = flags.length ? `Missed by the fault model. The activity monitor did catch it: "${flags[0].title}" at minute ${Math.floor(flags[0].m)}.` : 'Missed. Neither the fault model nor the activity monitor raised anything.'; }
+  else if (issue.type === fault) { outcome = 'correct'; handling = `Detected and named correctly as "${T.label}".`; }
+  else if (issue.type === 'unknown') { outcome = 'unknown'; handling = 'Detected as an unclassified anomaly. The model sees that something is wrong but cannot say what, so the advice is generic.'; }
+  else { outcome = 'misnamed'; handling = `Detected, but named "${T.label}", which is wrong. ${F.truth || ''} The cause, checks and actions shown to the operator would be for the wrong problem.`; }
+  if (outcome === 'misnamed' && responded && actuator.commands.length) note += ' The machine was stopped for a problem it did not have.';
+  if (issue && flags.length) handling += ` The activity monitor also flagged "${flags[0].title}" at minute ${Math.floor(flags[0].m)}.`;
 
   return {
-    delayMin: tooLate ? null : delayMin, failedFirst: tooLate, detected: !!issue, detectMin: det === null ? null : (det - WARMUP) / TICKS_PER_MIN, type: issue ? issue.type : null, label: T.label, title: T.title,
+    delayMin: tooLate ? null : delayMin, failedFirst: tooLate, detected: !!issue, detectMin: det === null ? null : (det - WARMUP) / TICKS_PER_MIN,
+    type: issue ? issue.type : null, label: T ? T.label : null, title: T ? T.title : null, outcome, handling,
     severity: issue ? issue.severity : null, confidence: issue ? issue.confidence : null, loss: Math.round(total), note,
-    downtimeMin: issue ? Math.round(issue.downtime_h * 60) : null, scrapKg: issue ? Math.round(issue.scrap_kg) : null,
+    downtimeMin: Math.round((issue ? issue.downtime_h : shadowDown) * 60), scrapKg: Math.round(issue ? issue.scrap_kg : shadowScrap), flags,
     notified: db.prepare('SELECT u.name, n.channel, n.level, n.sent_at FROM notifications n JOIN users u ON u.id = n.user_id ORDER BY n.id').all().map((n) => ({ name: n.name, channel: n.channel, level: n.level, m: minute(n.sent_at) })),
     escalations: db.prepare("SELECT COUNT(*) n FROM events WHERE type = 'escalated'").get().n,
     actions: db.prepare('SELECT kind, risk, status FROM actions ORDER BY id').all().map((a) => ({ label: ACTIONS[a.kind].label, risk: a.risk, status: a.status })),
@@ -72,7 +96,7 @@ function runOne({ model, modelVersionId, costs, fault, severity, speed, startHou
 }
 
 // Runs one scenario three ways: caught early, caught late, never acted on.
-function runScenario(params, { model, modelVersionId = null, costs = null }) {
+function runScenario(params, { model, modelVersionId = null, costs = null, ttfMin = null }) {
   const num = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
   const p = {
     fault: FAULTS[params.fault] ? params.fault : 'bearing',
@@ -80,11 +104,12 @@ function runScenario(params, { model, modelVersionId = null, costs = null }) {
     startHour: Math.round(num(params.startHour, 10, 0, 23)), peak: !!params.peak,
     responseMin: Math.round(num(params.responseMin, 10, 0, 240)), lateMin: Math.round(num(params.lateMin, 120, 1, 480)),
   };
-  const base = { model, modelVersionId, costs, fault: p.fault, severity: p.severity, speed: p.speed, startHour: p.startHour, peak: p.peak };
+  const F = FAULTS[p.fault];
+  const base = { model, modelVersionId, costs, ttfMin, fault: p.fault, severity: p.severity, speed: p.speed, startHour: p.startHour, peak: p.peak };
   const early = runOne({ ...base, delayMin: p.responseMin });
   const late = runOne({ ...base, delayMin: p.responseMin + p.lateMin });
   const never = runOne({ ...base, delayMin: null });
-  return { simulated: true, params: p, scenario: FAULTS[p.fault].name, early, late, never };
+  return { simulated: true, params: p, scenario: F.name, trained: !F.untrained, truth: F.truth || null, early, late, never };
 }
 
-module.exports = { runScenario, runOne };
+module.exports = { runScenario, runOne, DEFAULT_TTF };
