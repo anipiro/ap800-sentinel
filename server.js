@@ -16,6 +16,7 @@ const kb = require('./src/kb');
 const parts = require('./src/parts');
 const audit = require('./src/audit');
 const monitor = require('./src/monitor');
+const reportgen = require('./src/reportgen');
 const risk = require('./src/risk');
 const { runScenario, crossCheckComparison } = require('./src/sandbox');
 
@@ -27,6 +28,8 @@ const db = open();
 const { model, versionId } = loadOrTrain(db);
 const engine = new Sentinel({ db, model, modelVersionId: versionId, notifiers: [new InAppNotifier(), new TelegramNotifier()], actuator: new MockActuator(), escalateAfterS: Number(process.env.ESCALATE_AFTER_S) || 20 });
 setInterval(() => { try { engine.tick(); } catch (e) { console.error('tick failed:', e); } }, 500);
+const makeReport = (period) => reportgen.build(db, { period, model, health: engine.state(engine.seq).machine.health, timeScale: engine.timeScale, target: engine.machine.target_kg_h, assumptions: engine.assumptions() });
+setInterval(() => { try { reportgen.runSchedule(engine, makeReport); } catch (e) { console.error('report schedule failed:', e); } }, 60000);
 
 // ---- sessions (demo sign-in: pick a person, no password) --------------------
 const sessions = new Map();
@@ -103,6 +106,9 @@ async function api(req, res, url) {
   if (p === '/api/model-health' && GET) { engine.need(user, 'technician'); return send(res, 200, monitor.health(db, model, versionId)); }
   if (p === '/api/model/drift-limit' && POST) { const body = await readBody(req); monitor.setDriftThreshold(engine, body.value, user); return send(res, 200, { ok: true }); }
   if ((m = /^\/api\/issues\/(\d+)\/feedback$/.exec(p)) && POST) { const body = await readBody(req); monitor.feedback(engine, Number(m[1]), String(body.verdict), user); return send(res, 200, { ok: true }); }
+  if (p === '/api/report' && GET) { engine.need(user, 'manager'); return send(res, 200, { report: makeReport(q.period), sends: reportgen.sends(db) }); }
+  if (p === '/api/report.html' && GET) { engine.need(user, 'manager'); const r = makeReport(q.period); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Disposition': `attachment; filename="ap800-${r.period}-report-${new Date(r.to).toISOString().slice(0, 10)}.html"` }); return res.end(reportgen.toHtml(r)); }
+  if (p === '/api/report/send' && POST) { engine.need(user, 'manager'); const body = await readBody(req); const id = reportgen.send(engine, makeReport(body.period), user.name); return send(res, 200, { ok: true, id }); }
   if (p === '/api/audit' && GET) { engine.need(user, 'manager'); return send(res, 200, { entries: audit.entries(db, q), counts: audit.counts(db), categories: audit.CATEGORIES }); }
   if (p === '/api/audit.csv' && GET) { engine.need(user, 'manager'); return csv(res, 'ap800-audit.csv', audit.entries(db, { ...q, limit: 5000 }).map((r) => ({ time: new Date(r.ts).toISOString(), category: r.category_label, who: r.who, what: r.what, issue: r.issue_id || '' }))); }
   if (p === '/api/finance' && GET) { engine.need(user, 'manager'); return send(res, 200, reports.finance(db)); }

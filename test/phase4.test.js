@@ -83,3 +83,40 @@ test('model monitoring: every issue carries its model version; feedback is count
   assert.equal(monitor.health(db, model, 1, eng.now()).drift_threshold, 3);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action = 'set_drift_threshold'").get().n, 1);
 });
+
+// ---- 3. scheduled reports ------------------------------------------------------------
+const reportgen = require('../src/reportgen');
+test('reports: daily and weekly reports carry health, issues, losses, savings and top risks, and render to a file', () => {
+  const { db, eng, run } = rig();
+  run(30); eng.injectFault('jam', U.op); run(30); eng.resolve(eng.active.id, U.tech, { note: 'Cleared' }); run(20);
+  const daily = reportgen.build(db, { period: 'daily', now: eng.now(), model, health: 96 });
+  assert.equal(daily.period, 'daily'); assert.equal(daily.totals.issues, 1); assert.equal(daily.totals.open, 0); assert.ok(daily.totals.loss > 0); assert.ok(daily.totals.savings > 0);
+  assert.equal(daily.issues[0].title, 'Exit belt jammed'); assert.equal(daily.top_risks.length, 3); assert.ok(daily.kpis.oee > 0); assert.equal(daily.kpis.unplanned_stops, 1);
+  assert.ok(daily.parts_short.some((p) => p.name === 'Exit belt'));
+  const weekly = reportgen.build(db, { period: 'weekly', now: eng.now(), model });
+  assert.equal(weekly.label, 'Weekly report'); assert.equal(weekly.outlook.days, 30);
+  assert.equal(reportgen.build(db, { period: 'nonsense', now: eng.now(), model }).period, 'daily');
+  const html = reportgen.toHtml(daily);
+  assert.match(html, /^<!doctype html>/); assert.match(html, /Daily report/); assert.match(html, /Exit belt jammed/); assert.match(html, /Top risks/); assert.match(html, /96 \/ 100/);
+  assert.ok(!/<script/i.test(html));
+});
+test('reports: sending goes to the mock notifier only, and the schedule sends each report once', () => {
+  let hour = 7;
+  const db = open(':memory:'); let clock = new Date(2026, 0, 5, hour, 30, 0).getTime();     // Monday 5 Jan 2026, 07:30
+  const live = new MockNotifier('in_app');
+  const eng = new Sentinel({ db, model, modelVersionId: 1, notifiers: [live], actuator: new MockActuator(), now: () => clock });
+  const make = (period) => reportgen.build(db, { period, now: eng.now(), model });
+  const before = reportgen.mock.sent.length;
+  reportgen.send(eng, make('daily'), 'Mariam');
+  assert.equal(reportgen.mock.sent.length, before + 1); assert.equal(live.sent.length, 0, 'the live notifier is not used for reports');
+  const row = db.prepare('SELECT * FROM report_sends').get();
+  assert.equal(row.channel, 'mock'); assert.match(row.status, /not sent/); assert.match(row.recipients, /Mariam/);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM events WHERE type = 'report_sent'").get().n, 1);
+  assert.deepEqual(reportgen.runSchedule(eng, make), [], 'nothing is due before 08:00');
+  clock += 45 * 60000;                                                                        // 08:15 on a Monday
+  assert.deepEqual(reportgen.runSchedule(eng, make), ['daily', 'weekly']);
+  assert.deepEqual(reportgen.runSchedule(eng, make), [], 'not sent twice in the same day');
+  clock += 24 * 3600000;                                                                       // Tuesday 08:15
+  assert.deepEqual(reportgen.runSchedule(eng, make), ['daily']);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM report_sends WHERE by_name = 'schedule'").get().n, 3);
+});

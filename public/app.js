@@ -315,7 +315,7 @@
 
   let kpiPeriod = '24h';
   async function viewSummary() {
-    const s = await api('api/summary'), k = await api('api/kpis?period=' + kpiPeriod), ho = await api('api/handover');
+    const s = await api('api/summary'), k = await api('api/kpis?period=' + kpiPeriod), ho = await api('api/handover'), rp = can('manager') ? await api('api/report?period=daily') : null;
     const pc = (x) => (x === null ? 'n/a' : (x * 100).toFixed(1) + ' %'), hrs = (x) => (x === null ? 'n/a' : x + ' h');
     $('#v-summary').innerHTML = `<section class="panel"><div class="head"><h2>Key figures</h2><label class="row small noprint" for="kpi-period">Period <select id="kpi-period">${[['1h', 'Last hour'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days']].map(([v, l]) => `<option value="${v}" ${v === kpiPeriod ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
         <dl class="kv big"><div><dt>OEE</dt><dd>${pc(k.oee)}</dd></div><div><dt>Availability</dt><dd>${pc(k.availability)}</dd></div><div><dt>Performance</dt><dd>${pc(k.performance)}</dd></div><div><dt>Quality</dt><dd>${pc(k.quality)}</dd></div>
@@ -330,9 +330,14 @@
       <section class="panel"><div class="head"><h2>Shift handover</h2><span class="small muted">${esc(ho.shift)}, since ${clock(ho.since)}</span></div>
         <dl class="kv"><div><dt>Issues this shift</dt><dd>${ho.counts.issues}</dd></div><div><dt>Still open</dt><dd>${ho.counts.open}</dd></div><div><dt>Open work orders</dt><dd>${ho.counts.work_orders_open}</dd></div><div><dt>Downtime</dt><dd>${ho.counts.downtime_min} min</dd></div><div><dt>Losses</dt><dd>${money(ho.counts.loss)}</dd></div></dl>
         <div class="half"><div><h3>What happened</h3><ul class="list">${ho.happened.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div><div><h3>For the next shift to watch</h3><ul class="list">${ho.watch.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div></div></section>
+      ${rp ? `<section class="panel noprint"><div class="head"><h2>Reports</h2><span class="small muted">Daily at 08:00, weekly on Mondays at 08:00</span></div>
+        <div class="row"><a class="btn" href="api/report.html?period=daily">Download daily report</a><a class="btn" href="api/report.html?period=weekly">Download weekly report</a><button class="btn go" data-send="daily">Send daily report</button><button class="btn go" data-send="weekly">Send weekly report</button></div>
+        ${table(['Sent', 'Report', 'To', 'By', 'Result'], rp.sends.map((x) => `<tr><td>${stamp(x.ts)}</td><td>${x.period}</td><td>${esc(x.recipients)}</td><td>${esc(x.by_name)}</td><td>${esc(x.status)}</td></tr>`))}
+        <p class="note">Each report covers health, key figures, issues, downtime, losses, savings and the top risks. Sending goes to a mock notifier: it is recorded here and in the history, and nothing leaves this computer.</p><p class="err"></p></section>` : ''}
       <section class="panel"><h2>What stands out</h2><ul class="list" style="font-size:1rem;gap:8px">${s.insights.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
         <p class="note">Times use the demo clock. Money figures come from placeholder cost settings.</p></section>`;
     $('#kpi-period').onchange = (e) => { kpiPeriod = e.target.value; viewSummary(); };
+    document.querySelectorAll('#v-summary [data-send]').forEach((b) => { b.onclick = () => act(b, 'api/report/send', { period: b.dataset.send }); });
   }
 
   async function viewMoney() {
