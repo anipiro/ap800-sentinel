@@ -3,6 +3,7 @@ const { SIG, KEYS, FAULTS, sample, smooth } = require('./sim');
 const { IssueDetector, DT } = require('./ml/detector');
 const { TYPES, ACTIONS } = require('./catalog');
 const loss = require('./loss');
+const unusual = require('./unusual');
 
 const OPEN_AFTER = 6;      // consecutive anomalous ticks (3 s) before an issue is opened
 const CLEAR_AFTER = 20;    // consecutive normal ticks (10 s) before an issue clears by itself
@@ -19,7 +20,8 @@ class Sentinel {
     this.machineId = 1;
     this.machine = db.prepare('SELECT * FROM machines WHERE id = 1').get();
     this.t = Math.random() * 1000; this.tickNo = 0; this.seq = 0;
-    this.fault = null; this.faultAt = 0; this.stopped = false; this.ew = null;
+    this.fault = null; this.faultAt = 0; this.faultSpeed = 1; this.faultSev = 1; this.stopped = false; this.ew = null;
+    this.quirk = null; this.frozen = null;   // demo-only sensor oddities, see src/unusual.js
     this.ring = []; this.streak = 0; this.calm = 0; this.cooldown = 0; this.active = null; this.last = null;
   }
 
@@ -37,7 +39,8 @@ class Sentinel {
   // ---- one simulator step --------------------------------------------------
   tick() {
     this.t += DT; this.tickNo++;
-    this.ew = smooth(this.ew, sample(this.t, this.fault, this.t - this.faultAt, this.stopped));
+    this.ew = smooth(this.ew, sample(this.t, this.fault, (this.t - this.faultAt) * this.faultSpeed, this.stopped, this.faultSev));
+    unusual.applyQuirk(this);
     const p = this.stopped || this.cooldown > 0 ? { anomaly: false, score: 0, z: {}, contributions: [], maxAbsZ: 0 } : this.detector.predict(this.machineId, this.ew);
     if (this.cooldown > 0) this.cooldown--;
     this.last = p;
@@ -53,6 +56,7 @@ class Sentinel {
       if (!this.stopped && this.calm >= CLEAR_AFTER) this.resolve(this.active.id, null, { system: true });
       else if (this.tickNo % 2 === 0) { this.persistActive(); this.escalate(); }
     }
+    if (this.tickNo % 2 === 0) unusual.check(this);
     return p;
   }
 
@@ -224,6 +228,7 @@ class Sentinel {
     this.db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(v, key);
     this.event('config_changed', 'user', user.name, `${user.name} set ${key.replace(/_/g, ' ')} to ${value ? 'on' : 'off'}`);
     this.audit(user, 'set_setting', { key, value: v });
+    unusual.configChanged(this, key, !!value, user);
   }
 
   setCosts(body, user) {
@@ -241,8 +246,16 @@ class Sentinel {
   injectFault(fault, user) {
     this.need(user, 'operator');
     if (fault && !FAULTS[fault]) throw new BadRequest('Unknown fault');
-    this.fault = fault || null; this.faultAt = this.t;
+    this.fault = fault || null; this.faultAt = this.t; this.faultSpeed = 1; this.faultSev = 1;
     this.event('demo_fault', 'user', user.name, fault ? `Demo: "${FAULTS[fault].name}" played into the simulated machine` : 'Demo: simulated machine set back to normal');
+  }
+
+  // Demo control for unusual activity: freeze the pressure sensor, or leave the pump drawing power while stopped.
+  setQuirk(quirk, user) {
+    this.need(user, 'operator');
+    if (quirk && !['freeze', 'idle_draw'].includes(quirk)) throw new BadRequest('Unknown test');
+    this.quirk = quirk || null;
+    this.event('demo_fault', 'user', user.name, quirk ? `Demo: unusual-activity test "${quirk}" switched on` : 'Demo: unusual-activity test switched off');
   }
 
   // ---- live state for the dashboard ----------------------------------------
@@ -252,7 +265,7 @@ class Sentinel {
     const health = this.stopped ? 0 : a ? sevHealth[a.severity] : Math.round(100 - Math.min(15, p.maxAbsZ * 2.5));
     const out = {
       seq: this.seq, ticks: this.ring.filter((r) => r.seq > since),
-      machine: { id: this.machineId, name: this.machine.name, model: this.machine.model, target: this.machine.target_kg_h, stopped: this.stopped, fault: this.fault, health, status: this.stopped ? 'stopped' : a ? a.severity : 'ok' },
+      machine: { id: this.machineId, name: this.machine.name, model: this.machine.model, target: this.machine.target_kg_h, stopped: this.stopped, fault: this.fault, quirk: this.quirk, health, status: this.stopped ? 'stopped' : a ? a.severity : 'ok' },
       z: p.z, automation: this.setting('automation_enabled') === '1', escalateAfterS: this.escalateAfterS, active: null, actions: [], inbox: [],
     };
     if (a) {

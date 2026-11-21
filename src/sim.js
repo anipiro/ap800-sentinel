@@ -33,14 +33,15 @@ const FAULTS = {
 function gauss() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
 
 // One raw sample of every signal. t and age in seconds. stopped = machine halted (drives off).
-function sample(t, fault, age, stopped = false) {
+// sev scales how strong the fault is (1 = as trained, 0.5 = half the effect).
+function sample(t, fault, age, stopped = false, sev = 1) {
   const r = (tau) => 1 - Math.exp(-Math.max(0, age) / tau);
   const fx = fault && FAULTS[fault] ? FAULTS[fault].fx(r) : {};
   const mul = fx.mul || {}, add = fx.add || {};
   const out = {};
   KEYS.forEach((k, i) => {
     const s = SIG[k];
-    let v = (s.base * (1 + 0.01 * Math.sin(t / 37 + i)) + gauss() * s.noise) * (mul[k] ?? 1) + (add[k] ?? 0);
+    let v = (s.base * (1 + 0.01 * Math.sin(t / 37 + i)) + gauss() * s.noise) * (1 + sev * ((mul[k] ?? 1) - 1)) + sev * (add[k] ?? 0);
     if (stopped) v = k === 'temp_gear' ? s.base - 6 + gauss() * s.noise : k === 'thick' ? s.base + gauss() * s.noise : Math.abs(gauss() * s.noise * 0.5);
     out[k] = Math.max(0, v);
   });

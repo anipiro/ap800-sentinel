@@ -9,6 +9,9 @@ const { Sentinel, Forbidden, BadRequest } = require('./src/core');
 const { InAppNotifier, TelegramNotifier, MockActuator } = require('./src/adapters');
 const { SIG, FAULTS } = require('./src/sim');
 const reports = require('./src/reports');
+const unusual = require('./src/unusual');
+const risk = require('./src/risk');
+const { runScenario } = require('./src/sandbox');
 
 const PUB = path.join(__dirname, 'public');
 const PORT = process.env.PORT || 4800;
@@ -92,6 +95,27 @@ async function api(req, res, url) {
   if (p === '/api/settings' && POST) { const body = await readBody(req); engine.setSetting(String(body.key), !!body.value, user); return send(res, 200, { ok: true }); }
   if (p === '/api/costs' && POST) { engine.setCosts(await readBody(req), user); return send(res, 200, { ok: true }); }
 
+  // ---- Phase 2: sandbox simulator, risk projection, unusual activity ----------
+  if (p === '/api/sim/run' && POST) {
+    engine.need(user, 'technician');
+    const result = runScenario(await readBody(req), { model, modelVersionId: versionId, costs: engine.costs() });   // isolated: own database, mock notifiers, mock actuator
+    const id = Number(db.prepare('INSERT INTO simulations (created_at, created_by, scenario, params, detect_min, loss_early, loss_late, loss_never, result) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(Date.now(), user.name, result.scenario, JSON.stringify(result.params), result.early.detectMin, result.early.loss, result.late.loss, result.never.loss, JSON.stringify(result)).lastInsertRowid);
+    return send(res, 200, { id, ...result });
+  }
+  const simRows = () => db.prepare('SELECT id, created_at, created_by, scenario, params, detect_min, loss_early, loss_late, loss_never FROM simulations ORDER BY id DESC LIMIT 200').all();
+  if (p === '/api/sim/runs' && GET) { engine.need(user, 'technician'); return send(res, 200, simRows().map((r) => ({ ...r, params: JSON.parse(r.params) }))); }
+  if (p === '/api/sim/runs.csv' && GET) { engine.need(user, 'technician'); return csv(res, 'ap800-simulations.csv', simRows().map((r) => ({ SIMULATED: 'yes', ...r, created_at: new Date(r.created_at).toISOString() }))); }
+  if ((m = /^\/api\/sim\/runs\/(\d+)$/.exec(p)) && GET) { engine.need(user, 'technician'); const r = db.prepare('SELECT id, result FROM simulations WHERE id = ?').get(Number(m[1])); return r ? send(res, 200, { id: r.id, ...JSON.parse(r.result) }) : send(res, 404, { error: 'No such run' }); }
+  if (p === '/api/risk' && GET) {
+    engine.need(user, 'technician');
+    const act = engine.active ? db.prepare('SELECT id, type, fail_prob, projected_loss, rul_min, severity FROM issues WHERE id = ?').get(engine.active.id) : null;
+    const prof = reports.profile(db, engine.timeScale);
+    return send(res, 200, { projection: risk.project(db, model, { runtimeDays: prof.runtime_h / 16, active: act }), active: act && { ...act, title: engine.state(engine.seq).active.title, rul_min: engine.active.rul }, flags: unusual.list(db), quirk: engine.quirk, stopped: engine.stopped });
+  }
+  if ((m = /^\/api\/flags\/(\d+)\/verdict$/.exec(p)) && POST) { const body = await readBody(req); unusual.verdict(engine, Number(m[1]), user, String(body.verdict)); return send(res, 200, { ok: true }); }
+  if (p === '/api/demo/quirk' && POST) { const body = await readBody(req); engine.setQuirk(body.quirk || null, user); return send(res, 200, { ok: true }); }
+
   return send(res, 404, { error: 'Not found' });
 }
 
@@ -100,7 +124,7 @@ http.createServer((req, res) => {
   if (url.pathname.startsWith('/api/')) {
     api(req, res, url).catch((e) => {
       if (e instanceof Forbidden) return send(res, 403, { error: e.message });
-      if (e instanceof BadRequest) return send(res, 400, { error: e.message });
+      if (e instanceof BadRequest || e.status === 400) return send(res, 400, { error: e.message });
       console.error(e); send(res, 500, { error: 'Something went wrong on the server' });
     });
     return;
