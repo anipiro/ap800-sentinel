@@ -57,6 +57,14 @@ const TYPES = {
     action: 'Stop the machine and clear the belt.',
     failProb: 0.9, failure: { downtime_h: 2.5, repair_h: 2, parts: 1100 }, preventive: { downtime_h: 0.3, repair_h: 0.3, parts: 0 },
     actions: ['create_work_order', 'safe_shutdown'] },
+  // Not produced by the classifier. The engine switches a diagnosis to this when the activity monitor distrusts the sensor behind it.
+  sensor: { label: 'Possible sensor fault', category: 'Sensor fault', comp: [], sev: 'medium',
+    title: 'Possible sensor fault',
+    cause: 'The activity monitor flagged the sensor this diagnosis depends on, so the reading cannot be trusted. Check the sensor before treating this as a machine fault.',
+    check: ['Check the sensor, its cable and its connector', 'Compare with a manual or second reading', 'Replace the sensor if it does not recover'],
+    action: 'Check the sensor before acting on the diagnosis.',
+    failProb: 0.2, failure: { downtime_h: 0.25, repair_h: 1, parts: 350 }, preventive: { downtime_h: 0, repair_h: 0.5, parts: 350 },
+    actions: ['sensor_work_order'] },
   unknown: { label: 'Unclassified anomaly', category: 'Unknown', comp: [], sev: 'medium',
     title: 'Readings do not match normal running',
     cause: 'The pattern does not match any fault the model was trained on.',
@@ -69,6 +77,7 @@ const TYPES = {
 // risk 'low' may run automatically. risk 'physical' changes what the machine does and needs approval by default.
 const ACTIONS = {
   create_work_order:    { label: 'Create a work order',                    risk: 'low',      reversible: false },
+  sensor_work_order:    { label: 'Create a work order to check the sensor', risk: 'low',     reversible: false },
   schedule_maintenance: { label: 'Schedule maintenance at the next stop',  risk: 'low',      reversible: false },
   hold_batch:           { label: 'Hold recent product for inspection',     risk: 'low',      reversible: true },
   stop_feed:            { label: 'Stop the dough and filling feed',        risk: 'physical', reversible: true },
@@ -76,5 +85,7 @@ const ACTIONS = {
 };
 
 const SEVERITIES = ['low', 'medium', 'high', 'critical'];
+// Which station each signal is measured at.
+const STATION_OF = { cur_feed: 'hopper', cur_r12: 'r12', vib_roll: 'r12', temp_gear: 'r12', cur_r3: 'r3', cur_cal: 'cal', thick: 'cal', cur_drum: 'drum', vib_drum: 'drum', cur_belt: 'belt', defect: 'belt', rate: 'belt', motion: 'belt', press: 'pump', cur_pump: 'pump' };
 
-module.exports = { TYPES, ACTIONS, SEVERITIES };
+module.exports = { TYPES, ACTIONS, SEVERITIES, STATION_OF };

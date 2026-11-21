@@ -18,8 +18,8 @@ function history(db, { type, issue, q, from, to, actor, limit = 300 } = {}) {
 }
 
 function issues(db, { limit = 100 } = {}) {
-  return db.prepare('SELECT id, type, severity, status, confidence, detected_at, acked_at, resolved_at, resolved_by, actual_loss, projected_loss, savings, downtime_h FROM issues ORDER BY id DESC LIMIT ?').all(limit)
-    .map((i) => ({ ...i, label: typeOf(i.type).label, title: typeOf(i.type).title }));
+  return db.prepare('SELECT id, type, title AS stored_title, severity, status, confidence, detected_at, acked_at, resolved_at, resolved_by, actual_loss, projected_loss, savings, downtime_h FROM issues ORDER BY id DESC LIMIT ?').all(limit)
+    .map(({ stored_title, ...i }) => ({ ...i, label: typeOf(i.type).label, title: stored_title || typeOf(i.type).title }));
 }
 
 function issueDetail(db, id) {
@@ -29,7 +29,7 @@ function issueDetail(db, id) {
   const steps = [['Detected', i.detected_at], ['Notified', i.notified_at], ['Acknowledged', i.acked_at], ['Action taken', i.action_at], ['Resolved', i.resolved_at], ['Verified', i.verified_at]]
     .map(([name, at]) => ({ name, at }));
   return {
-    ...i, explanation: JSON.parse(i.explanation || '{}'), label: T.label, category: T.category, title: T.title, cause: T.cause, check: T.check, recommended: T.action,
+    ...i, explanation: JSON.parse(i.explanation || '{}'), label: T.label, category: T.category, title: i.title || T.title, cause: T.cause, check: T.check, recommended: T.action,
     steps,
     events: db.prepare('SELECT ts, type, actor_type, actor, summary FROM events WHERE issue_id = ? ORDER BY id').all(id),
     actions: db.prepare('SELECT a.*, u.name AS decided_name FROM actions a LEFT JOIN users u ON u.id = a.decided_by WHERE a.issue_id = ? ORDER BY a.id').all(id).map((a) => ({ ...a, label: ACTIONS[a.kind].label, reversible: ACTIONS[a.kind].reversible })),

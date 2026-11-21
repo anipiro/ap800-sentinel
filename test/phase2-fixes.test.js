@@ -45,7 +45,7 @@ test('frozen sensor: missed by the fault model, caught by the activity monitor',
 });
 test('sensor drop-out: the model raises an issue but the monitor flags the impossible jump', () => {
   const r = runScenario({ fault: 'sensor_dropout' }, { model }).never;
-  assert.equal(r.detected, true); assert.ok(['misnamed', 'unknown'].includes(r.outcome));
+  assert.equal(r.detected, true); assert.equal(r.outcome, 'sensor');
   assert.ok(r.flags.some((f) => f.kind === 'implausible'));
 });
 test('untrained scenarios cannot be played into the live machine', () => {
@@ -77,11 +77,11 @@ test('real faults, stops and restarts do not look implausible', () => {
 // ---- 3. escalated flags reach the manager's inbox ----------------------------
 test('escalating a flag puts it in the manager inbox and nobody else\'s', () => {
   const { db, eng, notifier } = rig();
-  const id = unusual.raise(eng, 'frozen_sensor', 'press', 'test explanation');
+  const id = unusual.raise(eng, 'repeated_overrides', 'day', 'test explanation');
   assert.equal(eng.state(0, U.mgr).flagAlerts.length, 0);
   unusual.verdict(eng, id, U.tech, 'escalate');
   const inbox = eng.state(0, U.mgr).flagAlerts;
-  assert.equal(inbox.length, 1); assert.equal(inbox[0].flag_id, id); assert.equal(inbox[0].title, 'A sensor reading has stopped changing');
+  assert.equal(inbox.length, 1); assert.equal(inbox[0].flag_id, id); assert.equal(inbox[0].title, 'Repeated overrides on this machine');
   assert.equal(eng.state(0, U.tech).flagAlerts.length, 0);
   assert.ok(notifier.sent.some((m) => m.user.name.startsWith('Mariam')));
   assert.throws(() => unusual.markAlertRead(eng, inbox[0].id, U.tech), /No such alert/);

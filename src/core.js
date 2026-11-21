@@ -1,13 +1,14 @@
 // The monitoring engine: simulator tick -> detection -> issue -> notification/escalation -> remediation -> losses -> history.
 const { SIG, KEYS, FAULTS, sample, smooth } = require('./sim');
 const { IssueDetector, DT } = require('./ml/detector');
-const { TYPES, ACTIONS } = require('./catalog');
+const { TYPES, ACTIONS, STATION_OF } = require('./catalog');
 const loss = require('./loss');
 const unusual = require('./unusual');
 
 const OPEN_AFTER = 6;      // consecutive anomalous ticks (3 s) before an issue is opened
 const CLEAR_AFTER = 20;    // consecutive normal ticks (10 s) before an issue clears by itself
 const TEMP_LIMIT = 75;     // °C, gearbox failure threshold used for remaining-life estimate
+const LOW_CONFIDENCE = 0.6; // below this, or resting on a single sensor, a diagnosis is treated as uncertain
 const RANK = { operator: 1, technician: 2, manager: 3 };
 
 class Forbidden extends Error {}
@@ -48,6 +49,7 @@ class Sentinel {
     const p = this.stopped || this.cooldown > 0 ? { anomaly: false, score: 0, z: {}, contributions: [], maxAbsZ: 0 } : this.detector.predict(this.machineId, unusual.maskImplausible(this));
     if (this.cooldown > 0) this.cooldown--;
     this.last = p;
+    (this.zHist = this.zHist || []).push(p.z); if (this.zHist.length > 6) this.zHist.shift();
     const v = {}; KEYS.forEach((k) => { v[k] = +this.ew[k].toFixed(SIG[k].dp + 1); });
     this.ring.push({ seq: ++this.seq, ts: this.now(), v, a: p.anomaly ? 1 : 0, s: p.score });
     if (this.ring.length > 240) this.ring.shift();
@@ -57,6 +59,7 @@ class Sentinel {
     if (!this.active && this.streak >= OPEN_AFTER) this.openIssue(p);
     if (this.active) {
       this.accrue(p);
+      this.crossCheck(p);
       if (!this.stopped && this.calm >= CLEAR_AFTER) this.resolve(this.active.id, null, { system: true });
       else if (this.tickNo % 2 === 0) { this.persistActive(); this.escalate(); }
     }
@@ -65,17 +68,73 @@ class Sentinel {
   }
 
   // ---- issues --------------------------------------------------------------
+  // Turns the model's raw verdict into what people are shown, after two cross-checks:
+  //  1. if the activity monitor distrusts a sensor the verdict depends on, it becomes a possible sensor fault;
+  //  2. if the verdict rests on one sensor while everything else looks normal, its confidence is lowered.
+  diagnose(p, extraKeys = []) {
+    const T0 = TYPES[p.type] || TYPES.unknown;
+    const keys = [...new Set([...p.contributions.map((x) => x.key), ...extraKeys])];
+    const suspects = unusual.suspectKeys(this), hit = keys.find((k) => suspects[k]);
+    if (hit) {
+      const T = TYPES.sensor, name = SIG[hit].label.toLowerCase();
+      return { type: 'sensor', T, keys, title: `Possible sensor fault: check the ${name} sensor`, comp: [STATION_OF[hit]], severity: T.sev, confidence: p.confidence, low: false, single: null,
+        sensor: { key: hit, label: SIG[hit].label, why: suspects[hit].why }, original: { type: p.type, label: T0.label, title: T0.title, confidence: p.confidence },
+        cause: `The ${name} sensor ${suspects[hit].why}, and this diagnosis depends on it. ${T.cause}`, note: null };
+    }
+    // a signal counts as deviating only if it has been off in at least 5 of the last 6 readings, so one noisy sample neither creates nor hides support
+    const hist = this.zHist && this.zHist.length >= 6 ? this.zHist : [p.z];
+    const deviating = KEYS.filter((k) => hist.filter((z) => Math.abs(z[k] || 0) > 3).length >= Math.min(5, hist.length));
+    const single = deviating.length === 1 ? deviating[0] : null;
+    const confidence = single ? +Math.min(0.5, p.confidence * 0.6).toFixed(3) : p.confidence;
+    const low = !!single || confidence < LOW_CONFIDENCE;
+    const note = single ? `Confidence lowered from ${Math.round(p.confidence * 100)} % to ${Math.round(confidence * 100)} %: this diagnosis rests on one sensor (${SIG[single].label.toLowerCase()}) while every other reading looks normal. It could be the machine or the sensor.`
+      : low ? `Low confidence (${Math.round(confidence * 100)} %): the readings only loosely match this fault.` : null;
+    return { type: p.type, T: T0, keys, title: T0.title, comp: T0.comp, severity: T0.sev, confidence, low, single, sensor: null, original: null, cause: T0.cause, note };
+  }
+
+  explain(p, d) {
+    return { summary: d.cause, contributions: p.contributions, score: p.score, threshold: +this.detector.model.thr.toFixed(4), max_deviation: p.maxAbsZ, type_similarity: p.typeSimilarity,
+      recommended: d.T.action, sensor: d.sensor, original: d.original, confidence_note: d.note, single_sensor: d.single, model_confidence: p.confidence };
+  }
+
   openIssue(p) {
-    const T = TYPES[p.type] || TYPES.unknown, c = this.costs(), now = this.now();
+    const d = this.diagnose(p), T = d.T, c = this.costs(), now = this.now();
     const projected = loss.projectedLoss(T.failProb, T.failure, c);
-    const explanation = { summary: T.cause, contributions: p.contributions, score: p.score, threshold: +this.detector.model.thr.toFixed(4), max_deviation: p.maxAbsZ, type_similarity: p.typeSimilarity, recommended: T.action };
-    const id = Number(this.db.prepare('INSERT INTO issues (machine_id, component, type, severity, confidence, fail_prob, explanation, model_version_id, status, is_simulated, detected_at, projected_loss) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(this.machineId, T.comp[0] || null, p.type, T.sev, p.confidence, T.failProb, JSON.stringify(explanation), this.modelVersionId, 'detected', this.simulated ? 1 : 0, now, projected).lastInsertRowid);
-    this.active = { id, type: p.type, severity: T.sev, confidence: p.confidence, detectedAt: now, downtime_h: 0, scrap_kg: 0, level: 0, lastNotifyAt: 0, acked: false, rul: null };
-    this.event('issue_detected', 'model', `model v${this.modelVersionId ?? 0}`, `${T.title} (${T.sev}, ${Math.round(p.confidence * 100)} % confidence)`, { issueId: id, refTable: 'issues', refId: id, data: { contributions: p.contributions.map((x) => x.text) } });
+    const id = Number(this.db.prepare('INSERT INTO issues (machine_id, component, type, title, severity, confidence, fail_prob, explanation, model_version_id, status, is_simulated, detected_at, projected_loss) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(this.machineId, d.comp[0] || null, d.type, d.title, d.severity, d.confidence, T.failProb, JSON.stringify(this.explain(p, d)), this.modelVersionId, 'detected', this.simulated ? 1 : 0, now, projected).lastInsertRowid);
+    this.active = { id, type: d.type, modelType: p.type, title: d.title, cause: d.cause, comp: d.comp, keys: d.keys, low: d.low, single: d.single, note: d.note, sensor: d.sensor, original: d.original,
+      severity: d.severity, confidence: d.confidence, detectedAt: now, downtime_h: 0, scrap_kg: 0, level: 0, lastNotifyAt: 0, acked: false, rul: null };
+    this.event('issue_detected', 'model', `model v${this.modelVersionId ?? 0}`, `${d.title} (${d.severity}, ${Math.round(d.confidence * 100)} % confidence)${d.original ? `. If the sensor is correct: ${d.original.title}` : ''}${d.note ? '. ' + d.note : ''}`, { issueId: id, refTable: 'issues', refId: id, data: { contributions: p.contributions.map((x) => x.text) } });
     this.notifyLevel(1);
     this.planActions(p);
     return id;
+  }
+
+  // Re-checks an open issue on every tick: a sensor flagged later turns it into a sensor issue; a second sensor agreeing lifts a low-confidence warning.
+  crossCheck(p) {
+    const a = this.active;
+    if (!a || a.type === 'sensor' || this.stopped || !p.anomaly) return;
+    const d = this.diagnose(p, a.keys), now = this.now();
+    if (d.type === 'sensor') {
+      const T = d.T, projected = loss.projectedLoss(T.failProb, T.failure, this.costs());
+      d.original = { type: a.type, label: (TYPES[a.type] || TYPES.unknown).label, title: a.title, confidence: a.confidence };
+      this.db.prepare('UPDATE issues SET type = ?, title = ?, component = ?, severity = ?, fail_prob = ?, projected_loss = ?, explanation = ? WHERE id = ?')
+        .run('sensor', d.title, d.comp[0], d.severity, T.failProb, projected, JSON.stringify(this.explain(p, d)), a.id);
+      const cancelled = this.db.prepare("UPDATE actions SET status = 'cancelled', decided_at = ? WHERE issue_id = ? AND risk = 'physical' AND status IN ('pending_approval', 'suggested')").run(now, a.id).changes;
+      Object.assign(a, { type: 'sensor', title: d.title, cause: d.cause, comp: d.comp, severity: d.severity, low: false, single: null, note: null, sensor: d.sensor, original: d.original, rul: null });
+      this.event('reclassified', 'system', 'cross-check', `Changed to "${d.title}": the ${d.sensor.label.toLowerCase()} sensor ${d.sensor.why}. If the sensor is correct: ${d.original.title}.${cancelled ? ` ${cancelled} machine action${cancelled === 1 ? '' : 's'} withdrawn.` : ''}`, { issueId: a.id });
+      this.planActions(p);
+      this.notifyLevel(Math.max(1, a.level));
+      return;
+    }
+    if (a.low && d.type === a.type && !d.low) {
+      a.low = false; a.single = null; a.note = null; a.confidence = d.confidence;
+      const ex = JSON.parse(this.db.prepare('SELECT explanation FROM issues WHERE id = ?').get(a.id).explanation);
+      ex.confidence_note = null; ex.single_sensor = null; ex.confirmed = 'Other sensors now agree with this diagnosis.';
+      this.db.prepare('UPDATE issues SET confidence = ?, explanation = ? WHERE id = ?').run(d.confidence, JSON.stringify(ex), a.id);
+      this.db.prepare("UPDATE actions SET reason = replace(reason, 'Low confidence. Check the machine before approving. ', '') WHERE issue_id = ? AND status = 'pending_approval'").run(a.id);
+      this.event('confidence_raised', 'model', `model v${this.modelVersionId ?? 0}`, `Confidence raised to ${Math.round(d.confidence * 100)} %: other sensors now agree with the diagnosis. Low-confidence warning removed.`, { issueId: a.id });
+    }
   }
 
   accrue(p) {
@@ -148,7 +207,7 @@ class Sentinel {
   notifyLevel(level) {
     const a = this.active, T = TYPES[a.type] || TYPES.unknown, now = this.now();
     const people = this.onDuty(level);
-    const text = `${this.machine.name}: ${T.title}. Severity ${a.severity}. ${T.action}`;
+    const text = `${a.type === 'sensor' ? 'Sensor issue on ' : ''}${this.machine.name}: ${a.title}. Severity ${a.severity}. ${T.action}`;
     for (const user of people) for (const n of this.notifiers) {
       if (n.channel === 'telegram' && !['high', 'critical'].includes(a.severity)) continue;
       const res = n.send({ user, issue: a, text });
@@ -173,14 +232,17 @@ class Sentinel {
   planActions(p) {
     const a = this.active, T = TYPES[a.type] || TYPES.unknown, now = this.now();
     const auto = this.setting('automation_enabled') === '1';
-    const reason = `${T.label} detected with ${Math.round(p.confidence * 100)} % confidence`;
+    const base = `${T.label} detected with ${Math.round(a.confidence * 100)} % confidence`;
     for (const kind of T.actions) {
       const A = ACTIONS[kind];
-      const needsApproval = A.risk === 'physical' && this.setting('approval_' + kind) !== '0';
+      if (this.db.prepare("SELECT 1 FROM actions WHERE issue_id = ? AND kind = ? AND status <> 'cancelled'").get(a.id, kind)) continue;
+      // a machine action on an uncertain diagnosis always goes to the manager, whatever the settings say
+      const needsApproval = A.risk === 'physical' && (a.low || this.setting('approval_' + kind) !== '0');
+      const reason = A.risk === 'physical' && a.low ? `Low confidence. Check the machine before approving. ${base}` : base;
       const runNow = auto && !needsApproval;
       const status = runNow ? 'done' : A.risk === 'physical' ? 'pending_approval' : 'suggested';
       const id = Number(this.db.prepare('INSERT INTO actions (issue_id, machine_id, kind, risk, status, reason, confidence, created_at, executed_at) VALUES (?,?,?,?,?,?,?,?,?)')
-        .run(a.id, this.machineId, kind, A.risk, status, reason, p.confidence, now, runNow ? now : null).lastInsertRowid);
+        .run(a.id, this.machineId, kind, A.risk, status, reason, a.confidence, now, runNow ? now : null).lastInsertRowid);
       if (runNow) { this.execute(kind, a.id); this.event('action_auto', 'rule', 'remediation', `Done automatically: ${A.label}. Reason: ${reason}`, { issueId: a.id, refTable: 'actions', refId: id }); }
       else if (status === 'pending_approval') this.event('approval_requested', 'rule', 'remediation', `Waiting for manager approval: ${A.label}. Reason: ${reason}`, { issueId: a.id, refTable: 'actions', refId: id });
       else this.event('action_suggested', 'rule', 'remediation', `Suggested (automation is off): ${A.label}`, { issueId: a.id, refTable: 'actions', refId: id });
@@ -290,13 +352,13 @@ class Sentinel {
     };
     if (a) {
       const T = TYPES[a.type] || TYPES.unknown;
-      out.active = { id: a.id, type: a.type, label: T.label, title: T.title, cause: T.cause, check: T.check, comp: T.comp, severity: a.severity, confidence: a.confidence,
+      out.active = { id: a.id, type: a.type, label: T.label, title: a.title, cause: a.cause, check: T.check, comp: a.comp, severity: a.severity, confidence: a.confidence, low: a.low, note: a.note, original: a.original, sensor: a.sensor,
         detectedAt: a.detectedAt, acked: a.acked, level: a.level, rul: a.rul, loss: this.liveLoss(a), contributions: (this.last && this.last.contributions.length ? this.last.contributions : []).map((x) => x.text) };
-      out.actions = this.db.prepare('SELECT id, kind, risk, status, reason FROM actions WHERE issue_id = ? ORDER BY id').all(a.id).map((x) => ({ ...x, label: ACTIONS[x.kind].label, reversible: ACTIONS[x.kind].reversible }));
+      out.actions = this.db.prepare('SELECT id, kind, risk, status, reason FROM actions WHERE issue_id = ? ORDER BY id').all(a.id).map((x) => ({ ...x, label: ACTIONS[x.kind].label, reversible: ACTIONS[x.kind].reversible, warn: x.reason.startsWith('Low confidence') }));
     }
     if (user) out.flagAlerts = this.db.prepare("SELECT a.id, a.flag_id, a.sent_at, f.title, f.explanation, f.severity FROM flag_alerts a JOIN unusual_flags f ON f.id = a.flag_id WHERE a.user_id = ? AND a.channel = 'in_app' AND a.read_at IS NULL ORDER BY a.id DESC LIMIT 5").all(user.id);
-    if (user) out.inbox = this.db.prepare("SELECT n.id, n.issue_id, n.level, n.sent_at, i.type, i.severity FROM notifications n JOIN issues i ON i.id = n.issue_id WHERE n.user_id = ? AND n.channel = 'in_app' AND n.acked_at IS NULL AND i.status = 'detected' ORDER BY n.id DESC LIMIT 5").all(user.id)
-      .map((n) => ({ ...n, title: (TYPES[n.type] || TYPES.unknown).title }));
+    if (user) out.inbox = this.db.prepare("SELECT n.id, n.issue_id, n.level, n.sent_at, i.type, i.title AS issue_title, i.severity FROM notifications n JOIN issues i ON i.id = n.issue_id WHERE n.user_id = ? AND n.channel = 'in_app' AND n.acked_at IS NULL AND i.status = 'detected' ORDER BY n.id DESC LIMIT 5").all(user.id)
+      .map((n) => ({ ...n, title: n.issue_title || (TYPES[n.type] || TYPES.unknown).title }));
     return out;
   }
 }

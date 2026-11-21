@@ -30,9 +30,9 @@ const FAULTS = {
   jam:     { name: 'Exit belt jams',        fx: (r) => ({ mul: { cur_belt: 1 + 1.8 * r(1.5), motion: 1 - r(0.6), rate: 1 - r(3) } }) },
 
   // Scenarios the detection model was NOT trained on. Used by the simulator to show honestly what happens to something new.
-  sensor_frozen:  { name: 'Pressure sensor freezes',   untrained: true, freeze: 'press', truth: 'The filling pressure sensor is stuck on one value. The machine itself is fine.', fx: () => ({}) },
-  sensor_dropout: { name: 'Pressure sensor drops out', untrained: true, truth: 'The filling pressure sensor has lost its signal and reads zero. The machine itself is fine.', fx: (r) => ({ mul: { press: 1 - r(0.15) } }) },
-  sensor_drift:   { name: 'Pressure sensor drifts',    untrained: true, truth: 'The filling pressure sensor reads steadily higher than the true pressure. The machine itself is fine.', fx: (r, age) => ({ add: { press: Math.min(0.12, 0.0009 * age) } }) },
+  sensor_frozen:  { name: 'Pressure sensor freezes',   untrained: true, sensor: 'press', freeze: 'press', truth: 'The filling pressure sensor is stuck on one value. The machine itself is fine.', fx: () => ({}) },
+  sensor_dropout: { name: 'Pressure sensor drops out', untrained: true, sensor: 'press', truth: 'The filling pressure sensor has lost its signal and reads zero. The machine itself is fine.', fx: (r) => ({ mul: { press: 1 - r(0.05) } }) },
+  sensor_drift:   { name: 'Pressure sensor drifts',    untrained: true, sensor: 'press', truth: 'The filling pressure sensor reads steadily higher than the true pressure. The machine itself is fine.', fx: (r, age) => ({ add: { press: Math.min(0.12, 0.0009 * age) } }) },
   power_surge:    { name: 'Power surge',               untrained: true, truth: 'A supply surge pushes every motor current up for a few seconds.', fx: (r, age) => { const k = Math.exp(-age / 5); const m = 1 + 0.5 * k; return { mul: { cur_feed: m, cur_r12: m, cur_r3: m, cur_cal: m, cur_drum: m, cur_pump: m, cur_belt: m, vib_roll: 1 + 0.4 * k, vib_drum: 1 + 0.4 * k } }; } },
   perf_drop:      { name: 'Gradual performance drop',  untrained: true, truth: 'Output slides down slowly over an hour, with slightly more defects. No single part has failed.', fx: (r) => ({ mul: { rate: 1 - 0.22 * r(70), cur_drum: 1 - 0.08 * r(70), cur_cal: 1 - 0.06 * r(70) }, add: { defect: 1.8 * r(70) } }) },
 };

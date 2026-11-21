@@ -13,7 +13,7 @@ Open http://localhost:4800 and choose a person to sign in as. Needs Node 22.13 o
 | Command | What it does |
 |---|---|
 | `npm start` | Runs the website, the simulated machine and the detection engine |
-| `npm test` | Runs the test suite (33 tests) |
+| `npm test` | Runs the test suite (41 tests) |
 | `npm run train` | Retrains the detection model on fresh synthetic data. Restart the server afterwards |
 | `npm run reset` | Deletes the database so the next start is clean |
 
@@ -62,6 +62,11 @@ Model metrics are measured on synthetic test data from the same simulator. They 
 
 - **Simulator tab** (technician and manager): pick a scenario, severity, speed, time of day and response delay. The run happens in a sandbox with its own in-memory database, mock notifiers and a mock actuator. It shows time to detection, who would be alerted, what would run, and the loss if caught early, caught late, or not acted on. Runs are stored in the `simulations` table only and can be replayed and exported.
 - **Untrained scenarios**: pressure sensor freezing, dropping out or drifting, a power surge, and a gradual performance drop are in the simulator but not in the model's training data. Each result states plainly whether the model handled it correctly, saw it without understanding it, named the wrong fault, or missed it. On the current model: frozen sensor is missed by the fault model and caught by the activity monitor; drop-out and drift are named as filling faults, which is wrong; a surge is seen as an unclassified anomaly; a performance drop is detected after about an hour and named wrongly.
+- **Cross-check** (added after the first results; the model was not retrained): the activity monitor is connected to the fault model.
+  - If a sensor is flagged as frozen, out of range, changing impossibly fast, or just back from a data gap, any diagnosis that depends on it is shown as "Possible sensor fault: check the … sensor", with the model's diagnosis listed as "if the sensor is correct". Only a work order to check the sensor is created; no stop is recommended; the technician is alerted as a sensor issue. An issue already open is reclassified and its pending machine action withdrawn.
+  - A diagnosis that rests on one sensor while the rest look normal has its confidence lowered and says so. A machine action on a low-confidence diagnosis always needs manager approval and carries a warning. The warning is lifted when other sensors come to agree.
+  - Every sensor flag is sent to the technician on duty.
+  - The Simulator tab has a before/after table for the five untrained scenarios. After the cross-check: drop-out is correctly shown as a possible sensor fault; a frozen sensor is still missed by the fault model but the technician is now alerted; drift and performance drop are still named wrongly, at lowered confidence and with the machine action held back; a surge is unchanged.
 - **Risk tab**: Monte Carlo projection for 7, 30 and 90 days (2,000 random futures), risk ranking, heatmap and loss distribution. Event rates are placeholders that blend with recorded issue history.
 - **Unusual activity**: frozen sensor, physically impossible readings (outside the sensor range, or changing faster than the quantity can), energy use while stopped, running outside 06:00 to 22:00, a safeguard switched off, three or more rejected or undone actions in a day, a gap in the data. Each flag can be marked expected, investigated or escalated. Every check has a test button on the Risk tab except the data gap, which appears after a server restart, and the safeguard change, which you trigger on the Setup page. Out-of-range readings are hidden from the fault model. Escalated flags land in the manager's inbox on the Live tab.
 - **Assumptions**: event rates, minutes to breakdown, the early-catch rate and bearing age are editable by the manager on the Setup page and labelled "assumed" on the Risk tab.

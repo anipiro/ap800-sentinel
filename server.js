@@ -11,7 +11,7 @@ const { SIG, FAULTS } = require('./src/sim');
 const reports = require('./src/reports');
 const unusual = require('./src/unusual');
 const risk = require('./src/risk');
-const { runScenario } = require('./src/sandbox');
+const { runScenario, crossCheckComparison } = require('./src/sandbox');
 
 const PUB = path.join(__dirname, 'public');
 const PORT = process.env.PORT || 4800;
@@ -103,6 +103,7 @@ async function api(req, res, url) {
       .run(Date.now(), user.name, result.scenario, JSON.stringify(result.params), result.early.detectMin, result.early.loss, result.late.loss, result.never.loss, JSON.stringify(result)).lastInsertRowid);
     return send(res, 200, { id, ...result });
   }
+  if (p === '/api/sim/crosscheck' && GET) { engine.need(user, 'technician'); return send(res, 200, crossCheckComparison({ model, modelVersionId: versionId, costs: engine.costs(), ttfMin: engine.assumptions().ttf_min })); }
   const simRows = () => db.prepare('SELECT id, created_at, created_by, scenario, params, detect_min, loss_early, loss_late, loss_never FROM simulations ORDER BY id DESC LIMIT 200').all();
   if (p === '/api/sim/runs' && GET) { engine.need(user, 'technician'); return send(res, 200, simRows().map((r) => ({ ...r, params: JSON.parse(r.params) }))); }
   if (p === '/api/sim/runs.csv' && GET) { engine.need(user, 'technician'); return csv(res, 'ap800-simulations.csv', simRows().map((r) => ({ SIMULATED: 'yes', ...r, created_at: new Date(r.created_at).toISOString() }))); }

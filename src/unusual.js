@@ -22,7 +22,7 @@ const LIMITS = {
   press: [0, 0.6], thick: [0.3, 2.2], vib_roll: [0, 25], vib_drum: [0, 25], temp_gear: [-10, 120], defect: [0, 100], rate: [0, 880], motion: [0, 100],
 };
 // Fastest change the physical quantity can make, per second. Steel does not heat 6 °C in a second; filling pressure does not vanish in half a second.
-const MAX_RATE = { press: 0.35, temp_gear: 6, thick: 0.3 };
+const MAX_RATE = { press: 0.42, temp_gear: 6, thick: 0.3 };
 
 // Demo-only oddities, switched on from the test buttons on the Risk tab.
 //   freeze     pressure sensor stuck            spike      temperature sensor reads 180 °C
@@ -49,6 +49,26 @@ function maskImplausible(eng) {
   return copy;
 }
 
+// Sensors the monitor currently distrusts. The fault model's diagnoses are cross-checked against this list.
+const SENSOR_KINDS = ['frozen_sensor', 'implausible', 'data_gap'];
+const SUSPECT_TICKS = 60;
+function mark(eng, key, kind, why) { (eng.suspects = eng.suspects || {})[key] = { kind, why, last: eng.tickNo }; }
+function suspectKeys(eng) {
+  const out = {};
+  for (const [k, s] of Object.entries(eng.suspects || {})) if (eng.tickNo - s.last <= SUSPECT_TICKS) out[k] = s;
+  return out;
+}
+
+// Tell people about a flag. Each in_app row is that person's inbox entry.
+function alertPeople(eng, flagId, level, text, about) {
+  const now = eng.now();
+  for (const person of eng.onDuty(level)) for (const n of eng.notifiers) {
+    const res = n.send({ user: person, issue: null, text });
+    eng.db.prepare('INSERT INTO flag_alerts (flag_id, user_id, channel, status, sent_at) VALUES (?,?,?,?,?)').run(flagId, person.id, n.channel, res.status, now);
+    eng.event('notification', 'system', 'notifier', `${n.channel === 'in_app' ? 'In-app alert' : 'Telegram message'} to ${person.name} about ${about}: ${res.status.replace('_', ' ')}`, { refTable: 'unusual_flags', refId: flagId });
+  }
+}
+
 function raise(eng, kind, key, explanation, data = null) {
   const K = KINDS[kind], now = eng.now(), db = eng.db;
   const open = db.prepare("SELECT 1 FROM unusual_flags WHERE kind = ? AND key = ? AND (verdict IS NULL OR verdict = 'investigate' OR verdict_at > ?)").get(kind, key, now - DAY);
@@ -58,15 +78,18 @@ function raise(eng, kind, key, explanation, data = null) {
   const id = Number(db.prepare('INSERT INTO unusual_flags (machine_id, ts, kind, key, severity, title, explanation, data) VALUES (?,?,?,?,?,?,?,?)')
     .run(eng.machineId, now, kind, key, severity, K.title, explanation, data ? JSON.stringify(data) : null).lastInsertRowid);
   eng.event('unusual_activity', 'system', 'activity monitor', `${K.title}: ${explanation}`, { refTable: 'unusual_flags', refId: id });
+  if (SENSOR_KINDS.includes(kind)) alertPeople(eng, id, 1, `Sensor issue on ${eng.machine.name}: ${K.title}. ${explanation}`, 'a sensor issue');   // the technician on duty hears about every sensor problem
   return id;
 }
 
 // Runs on every tick: impossible jumps only show between two consecutive raw samples.
 function everyTick(eng) {
   eng._steady = eng.stopped || eng.cooldown > 0 || !eng.prevRaw ? 0 : (eng._steady || 0) + 1;
+  for (const [k, s] of Object.entries(eng.suspects || {})) if (s.kind === 'rate' && eng.last && Math.abs(eng.last.z[k] || 0) > 3) s.last = eng.tickNo;   // still reading abnormally: stay suspicious
   if (eng._steady < 12) return;
   for (const k of Object.keys(MAX_RATE)) {
     const perS = Math.abs(eng.raw[k] - eng.prevRaw[k]) / 0.5;
+    if (perS > MAX_RATE[k]) mark(eng, k, 'rate', 'changed faster than is physically possible');
     if (perS > MAX_RATE[k]) raise(eng, 'implausible', k + ':rate', `${SIG[k].label} jumped from ${eng.prevRaw[k].toFixed(SIG[k].dp)} to ${eng.raw[k].toFixed(SIG[k].dp)} ${SIG[k].unit} in half a second. The real quantity cannot change that fast (limit ${MAX_RATE[k]} ${SIG[k].unit} per second), so this is the sensor or its wiring, not the machine.`, { signal: k, from: eng.prevRaw[k], to: eng.raw[k] });
   }
 }
@@ -77,17 +100,21 @@ function check(eng) {
   if (!eng.simulated && eng._bootTs !== undefined && !eng._gapChecked) {
     eng._gapChecked = true;
     const gap = eng._bootTs ? now - eng._bootTs : 0;
+    if (gap > 15000) for (const k of KEYS) { mark(eng, k, 'gap', 'had a gap in its data just before'); eng.suspects[k].last = eng.tickNo - SUSPECT_TICKS / 2; }
     if (gap > 15000) raise(eng, 'data_gap', String(eng._bootTs), `No readings were recorded for ${Math.round(gap / 1000)} seconds. The data link or the monitoring server was down.`, { from: eng._bootTs, to: now });
   }
 
+  for (const k of outOfRange(eng)) mark(eng, k, 'range', 'reads outside its physical range');
   for (const k of outOfRange(eng))
     raise(eng, 'implausible', k, `${SIG[k].label} reads ${eng.ew[k].toFixed(SIG[k].dp)} ${SIG[k].unit}. This sensor's physical range on the machine is ${LIMITS[k][0]} to ${LIMITS[k][1]} ${SIG[k].unit}, so the value cannot be real. The fault model ignores this reading until it is back in range.`, { signal: k, value: eng.ew[k], limits: LIMITS[k] });
 
   if (!eng.stopped && ring.length >= 30) {
-    const last = ring.slice(-30);
+    const last = ring.slice(-30), impossible = outOfRange(eng);
     for (const k of KEYS) {
+      if (impossible.includes(k)) continue;   // already flagged as physically impossible
       let lo = Infinity, hi = -Infinity;
       for (const r of last) { if (r.v[k] < lo) lo = r.v[k]; if (r.v[k] > hi) hi = r.v[k]; }
+      if (hi - lo < 1e-9 && lo !== 0) mark(eng, k, 'frozen', 'has stopped changing');
       if (hi - lo < 1e-9 && lo !== 0) raise(eng, 'frozen_sensor', k, `${SIG[k].label} has read exactly ${lo} ${SIG[k].unit} for 15 seconds while the machine is running. A live sensor always moves a little, so this points to a failed sensor, a loose cable or tampering.`, { signal: k, value: lo });
     }
   }
@@ -123,11 +150,7 @@ function verdict(eng, id, user, v) {
   eng.db.prepare('UPDATE unusual_flags SET verdict = ?, verdict_by = ?, verdict_at = ? WHERE id = ?').run(v, user.name, now, id);
   const words = { expected: 'marked as expected', investigate: 'opened for investigation', escalate: 'escalated to the manager' }[v];
   eng.event('unusual_verdict', 'user', user.name, `${f.title}: ${words} by ${user.name}`, { refTable: 'unusual_flags', refId: id });
-  if (v === 'escalate') for (const person of eng.onDuty(3)) for (const n of eng.notifiers) {
-    const res = n.send({ user: person, issue: null, text: `${eng.machine.name}: ${f.title}. ${f.explanation}` });
-    eng.db.prepare('INSERT INTO flag_alerts (flag_id, user_id, channel, status, sent_at) VALUES (?,?,?,?,?)').run(id, person.id, n.channel, res.status, now);   // the in_app row is the manager's inbox entry
-    eng.event('notification', 'system', 'notifier', `${n.channel === 'in_app' ? 'In-app alert' : 'Telegram message'} to ${person.name} about unusual activity: ${res.status.replace('_', ' ')}`, { refTable: 'unusual_flags', refId: id });
-  }
+  if (v === 'escalate') alertPeople(eng, id, 3, `${eng.machine.name}: ${f.title}. ${f.explanation}`, 'unusual activity');
 }
 
 function markAlertRead(eng, alertId, user) {
@@ -139,4 +162,4 @@ function list(db, limit = 30) {
   return db.prepare('SELECT * FROM unusual_flags ORDER BY id DESC LIMIT ?').all(limit).map((f) => ({ ...f, data: f.data ? JSON.parse(f.data) : null }));
 }
 
-module.exports = { applyQuirk, everyTick, maskImplausible, check, raise, configChanged, verdict, markAlertRead, list, KINDS, QUIRKS, LIMITS, MAX_RATE };
+module.exports = { suspectKeys, SENSOR_KINDS, applyQuirk, everyTick, maskImplausible, check, raise, configChanged, verdict, markAlertRead, list, KINDS, QUIRKS, LIMITS, MAX_RATE };

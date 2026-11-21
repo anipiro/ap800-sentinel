@@ -133,7 +133,7 @@
     const role = a.risk === 'physical' ? 'manager' : 'technician';
     if (['pending_approval', 'suggested'].includes(a.status) && can(role)) b = `<button class="btn go" data-act="approve" data-id="${a.id}">${a.status === 'suggested' ? 'Run' : 'Approve'}</button><button class="btn plain" data-act="reject" data-id="${a.id}">Reject</button>`;
     else if (a.status === 'done' && a.reversible && can(role)) b = `<button class="btn plain" data-act="revert" data-id="${a.id}">Undo</button>`;
-    return `<div class="act"><span><b>${esc(a.label)}</b><br><span class="muted">${st}${a.risk === 'physical' ? ', changes what the machine does' : ''}</span></span><span class="row">${b}</span></div>`;
+    return `<div class="act"><span style="flex:1 1 200px"><b>${esc(a.label)}</b><br><span class="muted">${st}${a.risk === 'physical' ? ', changes what the machine does' : ''}</span>${a.warn && a.status === 'pending_approval' ? '<br><span class="warnline">Low confidence. Check the machine before approving.</span>' : ''}</span><span class="row">${b}</span></div>`;
   }
   function renderActive() {
     const a = state.active, box = $('#active');
@@ -142,12 +142,14 @@
       if (activeSig !== 'none') { activeSig = 'none'; box.innerHTML = `<p class="empty">${state.machine.stopped ? 'The machine is stopped. Undo the stop on the last issue to restart it.' : 'No active issue. When the model detects a problem it appears here with the reason, the people alerted and the actions taken.'}</p>`; }
       return;
     }
-    const sig = JSON.stringify([a.id, a.severity, a.acked, a.level, state.actions.map((x) => x.status), ME.role, state.machine.stopped]);
+    const sig = JSON.stringify([a.id, a.title, a.low, a.severity, a.acked, a.level, state.actions.map((x) => x.status + x.warn), ME.role, state.machine.stopped]);
     if (sig !== activeSig) {
       activeSig = sig;
       box.innerHTML = `<div class="issue ${a.severity}">
         <div class="head"><h3>${esc(a.title)}</h3><span class="sev ${a.severity}">${a.severity}</span></div>
         <span class="small muted">${esc(a.label)}, model confidence ${Math.round(a.confidence * 100)} %, detected ${clock(a.detectedAt)}</span>
+        ${a.original ? `<p class="small"><b>If the sensor is correct:</b> ${esc(a.original.title)} (${Math.round(a.original.confidence * 100)} % model confidence). No machine action is recommended until the sensor has been checked.</p>` : ''}
+        ${a.note ? `<p class="warnline">${esc(a.note)}</p>` : ''}
         <p class="small">${esc(a.cause)}</p>
         <div><span class="small muted">Why the model flagged it</span><ul class="list" id="a-why"></ul></div>
         <div><span class="small muted">What to check</span><ul class="list">${a.check.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></div>
@@ -170,7 +172,7 @@
   });
   function renderInbox() {
     $('#inbox-panel').hidden = !state.inbox.length && !state.flagAlerts.length;
-    $('#inbox').innerHTML = state.flagAlerts.map((n) => `<div class="act"><span style="flex:1 1 200px"><b>Unusual activity: ${esc(n.title)}</b><br><span class="muted">${esc(n.explanation)}<br>Escalated to you ${clock(n.sent_at)}</span></span><span class="row"><a class="btn plain" href="#risk">Open Risk</a><button class="btn go" data-alert="${n.id}">Mark as read</button></span></div>`).join('') + state.inbox.map((n) => `<div class="act"><span><b>${esc(n.title)}</b><br><span class="muted">Sent to you ${clock(n.sent_at)}, escalation level ${n.level}</span></span><button class="btn go" data-id="${n.issue_id}">Acknowledge</button></div>`).join('');
+    $('#inbox').innerHTML = state.flagAlerts.map((n) => `<div class="act"><span style="flex:1 1 200px"><b>Unusual activity: ${esc(n.title)}</b><br><span class="muted">${esc(n.explanation)}<br>Sent to you ${clock(n.sent_at)}</span></span><span class="row"><a class="btn plain" href="#risk">Open Risk</a><button class="btn go" data-alert="${n.id}">Mark as read</button></span></div>`).join('') + state.inbox.map((n) => `<div class="act"><span><b>${esc(n.title)}</b><br><span class="muted">Sent to you ${clock(n.sent_at)}, escalation level ${n.level}</span></span><button class="btn go" data-id="${n.issue_id}">Acknowledge</button></div>`).join('');
   }
   $('#inbox').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; if (b.dataset.alert) act(b, `api/flag-alerts/${b.dataset.alert}/read`); else act(b, `api/issues/${b.dataset.id}/ack`); });
 
@@ -266,6 +268,8 @@
         ${i.status === 'resolved' && can('manager') ? `<div class="row"><button class="btn go" id="verify">Verify the repair</button></div>` : ''}<p class="err"></p></section>
       <div class="half"><section class="panel"><h2>What was detected and why</h2><p>${esc(ex.summary)}</p>
           <ul class="list">${(ex.contributions || []).map((c) => `<li>${esc(c.text)}</li>`).join('')}</ul>
+          ${ex.original ? `<p><b>If the sensor is correct:</b> ${esc(ex.original.title)} (${esc(ex.original.label)}, ${Math.round(ex.original.confidence * 100)} % model confidence). The ${esc(ex.sensor.label.toLowerCase())} sensor ${esc(ex.sensor.why)}, so no machine action was recommended.</p>` : ''}
+          ${ex.confidence_note ? `<p class="warnline">${esc(ex.confidence_note)}</p>` : ''}${ex.confirmed ? `<p class="small">${esc(ex.confirmed)}</p>` : ''}
           <p class="small muted">Anomaly score ${ex.score} against a threshold of ${ex.threshold}. Largest deviation ${ex.max_deviation} standard deviations. Pattern match with "${esc(i.label)}": ${Math.round((ex.type_similarity || 0) * 100)} %.</p>
           <p><b>Recommended:</b> ${esc(i.recommended)}</p>${i.resolution ? `<p><b>Resolution:</b> ${esc(i.resolution)} (${esc(i.resolved_by)})</p>` : ''}</section>
         <section class="panel"><h2>Actions</h2>${table(['Action', 'Risk', 'Status', 'Decided by'], i.actions.map((a) => `<tr><td>${esc(a.label)}<br><span class="muted small">${esc(a.reason)}</span></td><td>${a.risk}</td><td>${a.status.replace('_', ' ')}</td><td>${esc(a.decided_name || (a.status === 'done' ? 'automatic' : ''))}</td></tr>`))}
@@ -417,24 +421,26 @@
 
   // ---- failure scenario simulator (sandbox) ----------------------------------
   let simResult = null, simVariant = 'early';
+  const OUTCOME = { correct: 'Handled correctly', sensor: 'Flagged as a possible sensor fault', sensor_wrong: 'Wrongly blamed on a sensor', unknown: 'Seen, but not understood', misnamed: 'Wrong diagnosis', missed: 'Missed by the fault model' };
   function renderSim() {
     const box = $('#sim-out'); if (!box) return;
     if (!simResult) { box.innerHTML = '<p class="empty">Choose a scenario and run it. The run happens in a sandbox: it cannot alert real people, stop the machine or appear in the real history.</p>'; return; }
     const r = simResult, names = { early: 'Caught early', late: 'Caught late', never: 'Nobody acts' }, v = r[simVariant], e = r.early;
     box.innerHTML = `<div class="head"><h2>Run ${r.id}: ${esc(r.scenario)}</h2><span class="simtag">SIMULATED, not real data</span></div>
       <p class="small muted">${r.trained ? 'The model was trained on this fault.' : 'The model was <b>not trained</b> on this scenario.'}${r.truth ? ' What is really happening: ' + esc(r.truth) : ''}</p>
-      <div class="verdict ${v.outcome}"><b>${{ correct: 'Handled correctly', unknown: 'Seen, but not understood', misnamed: 'Wrong diagnosis', missed: 'Missed by the fault model' }[v.outcome]}</b><span>${esc(v.handling)}</span></div>
-      <p>${v.detected ? `The fault model raised an issue <b>${v.detectMin} min</b> after it started: "${esc(v.label)}" (${v.severity}), ${Math.round(v.confidence * 100)} % confidence.` : '<b>The fault model raised no issue.</b>'}</p>
+      <div class="verdict ${v.outcome}"><b>${OUTCOME[v.outcome]}</b><span>${esc(v.handling)}</span></div>
+      ${r.before ? `<div class="verdict before"><b>Before cross-check: ${OUTCOME[r.before.outcome]}</b><span>${esc(r.before.text)}</span></div>` : ''}
+      <p>${v.detected ? `An issue was raised <b>${v.detectMin} min</b> after it started, shown as "${esc(v.title)}" (${v.severity}), ${Math.round(v.confidence * 100)} % confidence.${v.original ? ` If the sensor is correct: ${esc(v.original.title)}.` : ''}` : '<b>The fault model raised no issue.</b>'}</p>
       <div class="three">${['early', 'late', 'never'].map((k) => `<button class="variant" data-variant="${k}" aria-pressed="${k === simVariant}"><span class="small muted">${names[k]}${r[k].delayMin !== null && r[k].delayMin !== undefined ? `, response after ${r[k].delayMin} min` : ''}</span><b>${money(r[k].loss)}</b><span class="small">${esc(r[k].note)}</span></button>`).join('')}</div>
       <div class="half"><div><h3>Who would be alerted (${names[simVariant].toLowerCase()})</h3>${table(['Minute', 'Person', 'Channel', 'Level'], v.notified.map((n) => `<tr><td class="num">${Math.floor(n.m)}</td><td>${esc(n.name)}</td><td>${n.channel.replace('_', '-')}</td><td>${n.level}</td></tr>`))}</div>
         <div><h3>What the system would do</h3>${table(['Action', 'Outcome'], v.actions.map((a) => `<tr><td>${esc(a.label)}</td><td>${a.status === 'done' ? (a.risk === 'physical' ? 'Run after manager approval' : 'Run automatically') : a.status === 'pending_approval' ? 'Still waiting for approval' : a.status.replace('_', ' ')}</td></tr>`))}
           <p class="note">Downtime ${v.downtimeMin ?? 'n/a'} min, scrap ${v.scrapKg ?? 'n/a'} kg, escalations ${v.escalations}. ${v.mockMessages} alerts and ${v.mockCommands} machine commands went to sandbox mocks only.</p></div></div>
-      <h3>What the activity monitor flagged</h3>${table(['Minute', 'Flag', 'Why'], v.flags.map((f) => `<tr><td class="num">${Math.floor(f.m)}</td><td>${esc(f.title)}</td><td class="small">${esc(f.explanation)}</td></tr>`))}
+      <h3>What the activity monitor flagged</h3>${table(['Minute', 'Flag', 'Why', 'Sensor alert sent to'], v.flags.map((f) => `<tr><td class="num">${Math.floor(f.m)}</td><td>${esc(f.title)}</td><td class="small">${esc(f.explanation)}</td><td>${esc([...new Set(v.flagAlerts.filter((a) => a.title === f.title).map((a) => a.name))].join(', ') || 'nobody')}</td></tr>`))}
       <h3>Replay, ${names[simVariant].toLowerCase()}</h3><div id="sim-replay"></div>`;
     mountReplay($('#sim-replay'), v, true);
   }
   async function viewSim() {
-    const runs = await api('api/sim/runs'), el = $('#v-sim');
+    const runs = await api('api/sim/runs'), el = $('#v-sim'), cmp = await api('api/sim/crosscheck');
     const hours = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === 10 ? 'selected' : ''}>${String(h).padStart(2, '0')}:00${h >= 8 && h < 20 ? ' (day shift)' : ' (night shift)'}</option>`).join('');
     el.innerHTML = `<section class="panel"><div class="head"><h2>What could go wrong</h2><span class="small muted">Sandbox, separate from the live machine</span></div>
         <form class="form" id="sf"><label>Scenario<select id="sf-fault" name="fault"><optgroup label="Faults the model was trained on">${SCENARIOS.filter((s) => s.trained).map((s) => `<option value="${s.key}" ${s.key === 'bearing' ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</optgroup><optgroup label="Not in the training data">${SCENARIOS.filter((s) => !s.trained).map((s) => `<option value="${s.key}">${esc(s.name)}</option>`).join('')}</optgroup></select></label>
@@ -446,6 +452,9 @@
           <label style="flex-direction:row;align-items:center;gap:8px;color:var(--fg);font-size:.9rem"><input id="sf-peak" name="peak" type="checkbox"> During peak production (value per hour × 1.5)</label>
           <div class="row" style="align-items:end"><button class="btn go">Run scenario</button></div></form><p class="err"></p></section>
       <section class="panel sim" id="sim-out"></section>
+      <section class="panel sim"><div class="head"><h2>Scenarios the model was not trained on: before and after the cross-check</h2><span class="simtag">SIMULATED</span></div>
+        <p class="small muted">Same model both times; it has not been retrained. "Before" is the recorded result from before the activity monitor was connected to the fault model. "After" was just re-run with default settings.</p>
+        ${table(['Scenario', 'Before cross-check', 'After cross-check', '#Loss if caught early', '#Loss if nobody acts'], cmp.map((c) => `<tr><td><b>${esc(c.name)}</b><br><span class="small muted">${esc(c.truth)}</span></td><td><b>${OUTCOME[c.before.outcome]}</b><br><span class="small">${esc(c.before.text)}</span></td><td><b>${OUTCOME[c.after.outcome]}</b><br><span class="small">${esc(c.after.text)}</span></td><td class="num">${money(c.after.losses.early)}</td><td class="num">${money(c.after.losses.never)}</td></tr>`))}</section>
       <section class="panel sim"><div class="head"><h2>Stored runs</h2><span class="row"><span class="simtag">SIMULATED</span><a class="btn plain" href="api/sim/runs.csv">Export CSV</a></span></div>
         ${table(['Run', 'When', 'By', 'Scenario', 'Settings', '#Detected after', '#Caught early', '#Caught late', '#Nobody acts'], runs.map((r) => `<tr class="click" data-run="${r.id}"><td>${r.id}</td><td>${stamp(r.created_at)}</td><td>${esc((r.created_by || '').replace(/ \(.*/, ''))}</td><td>${esc(r.scenario)}${(SCENARIOS.find((s) => s.name === r.scenario) || {}).trained === false ? ' <span class="sev medium">untrained</span>' : ''}</td>
           <td class="small">severity ${r.params.severity}, speed ${r.params.speed}, ${String(r.params.startHour).padStart(2, '0')}:00${r.params.peak ? ', peak' : ''}, response ${r.params.responseMin} min, late +${r.params.lateMin} min</td>

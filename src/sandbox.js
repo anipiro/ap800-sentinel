@@ -22,6 +22,15 @@ const UNTRAINED_COST = {
   perf_drop:      { downtime_h: 0, repair_h: 2, parts: 200 },
 };
 
+// How the same model handled the untrained scenarios BEFORE the activity monitor was connected to it (recorded 21 Nov 2026, commit 2fd5f08).
+const BEFORE_CROSSCHECK = {
+  sensor_frozen:  { outcome: 'missed',   text: 'Missed by the fault model. The activity monitor flagged a frozen sensor at about minute 14, but nobody was alerted.' },
+  sensor_dropout: { outcome: 'misnamed', text: 'Named "Filling starvation" after 2.5 min at 83 % confidence. Stopping the feed was recommended. The monitor flagged an impossible jump at minute 0, but the two were not connected.' },
+  sensor_drift:   { outcome: 'misnamed', text: 'Named "Filling blockage" after about 36 min at 52 % confidence. A shutdown was recommended, and acting on it cost more than doing nothing.' },
+  power_surge:    { outcome: 'unknown',  text: 'Seen as an unclassified anomaly after 2.5 min, then cleared by itself.' },
+  perf_drop:      { outcome: 'misnamed', text: 'Named "Sheet tear" after about an hour at 55 % confidence. Stopping the feed was recommended.' },
+};
+
 function runOne({ model, modelVersionId, costs, ttfMin, fault, severity, speed, startHour, peak, delayMin }) {
   const db = open(':memory:');
   costs = costs || db.prepare('SELECT * FROM cost_params WHERE machine_id = 1').get();
@@ -50,9 +59,10 @@ function runOne({ model, modelVersionId, costs, ttfMin, fault, severity, speed, 
     if (delayMin !== null && det !== null && !responded && i >= det + delayMin * TICKS_PER_MIN && eng.active) {
       responded = true;
       eng.ack(issueId, tech);
-      for (const a of db.prepare("SELECT id FROM actions WHERE issue_id = ? AND status = 'pending_approval'").all(issueId)) eng.decide(a.id, mgr, true);
       repairUntil = i + Math.round((TYPES[eng.active.type] || TYPES.unknown).preventive.downtime_h * 60 * TICKS_PER_MIN);
     }
+    // After responding, the manager approves waiting machine actions, except ones carrying a low-confidence warning.
+    if (responded && !resolved && eng.active) for (const a of db.prepare("SELECT id FROM actions WHERE issue_id = ? AND status = 'pending_approval' AND reason NOT LIKE 'Low confidence%'").all(issueId)) eng.decide(a.id, mgr, true);
     if (responded && !resolved && i >= repairUntil && eng.active) { eng.resolve(issueId, tech, { note: 'Simulated repair' }); resolved = true; endAt = i + 20; }
     if (eng.active) lastLoss = eng.liveLoss();
     if (i % 2 === 0 && eng.ew) { const v = {}; REC.forEach((k) => { v[k] = +eng.ew[k].toFixed(SIG[k].dp + 1); }); points.push({ m: (i - WARMUP) / TICKS_PER_MIN, v, a: eng.last.anomaly ? 1 : 0, loss: Math.round(lastLoss) }); }
@@ -66,6 +76,9 @@ function runOne({ model, modelVersionId, costs, ttfMin, fault, severity, speed, 
   const T = issue ? (TYPES[issue.type] || TYPES.unknown) : null;
   const missedCost = trained ? loss.eventCost(TYPES[fault].failure, c) : loss.eventCost(UNTRAINED_COST[fault], c);
   const flags = db.prepare('SELECT ts, kind, title, explanation FROM unusual_flags ORDER BY id').all().map((f) => ({ m: minute(f.ts), kind: f.kind, title: f.title, explanation: f.explanation }));
+  const flagAlerts = db.prepare("SELECT u.name, a.channel, a.sent_at, f.title FROM flag_alerts a JOIN users u ON u.id = a.user_id JOIN unusual_flags f ON f.id = a.flag_id ORDER BY a.id").all().map((a) => ({ name: a.name, channel: a.channel, m: minute(a.sent_at), title: a.title }));
+  const ex = issue ? JSON.parse(issue.explanation) : {};
+  const held = db.prepare("SELECT COUNT(*) n FROM actions WHERE reason LIKE 'Low confidence%' AND status IN ('pending_approval', 'cancelled')").get().n;
 
   let total, note;
   if (!issue) { total = loss.round2(loss.actualLoss({ downtime_h: shadowDown, scrap_kg: shadowScrap }, c).total + missedCost); note = 'The fault model raised no issue, so nobody is alerted. The loss is what accrued over two hours plus the assumed cost of dealing with it later.'; }
@@ -75,16 +88,18 @@ function runOne({ model, modelVersionId, costs, ttfMin, fault, severity, speed, 
 
   // Plain statement of how the model coped with this scenario.
   let handling, outcome;
-  if (!issue) { outcome = 'missed'; handling = flags.length ? `Missed by the fault model. The activity monitor did catch it: "${flags[0].title}" at minute ${Math.floor(flags[0].m)}.` : 'Missed. Neither the fault model nor the activity monitor raised anything.'; }
+  if (!issue) { outcome = 'missed'; handling = flags.length ? `Missed by the fault model. The activity monitor did catch it: "${flags[0].title}" at minute ${Math.floor(flags[0].m)}${flagAlerts.length ? `, and alerted ${flagAlerts[0].name} as a sensor issue` : ''}.` : 'Missed. Neither the fault model nor the activity monitor raised anything.'; }
+  else if (issue.type === 'sensor') { outcome = F.sensor ? 'sensor' : 'sensor_wrong'; handling = `Shown as "${issue.title}", with "${ex.original.title}" listed as the diagnosis if the sensor is correct. ${F.sensor ? 'That is the right call: the sensor is the problem.' : 'That is wrong: the machine really has a fault.'} No shutdown or feed stop was recommended; a work order to check the sensor was created and the technician was alerted as a sensor issue.`; }
   else if (issue.type === fault) { outcome = 'correct'; handling = `Detected and named correctly as "${T.label}".`; }
   else if (issue.type === 'unknown') { outcome = 'unknown'; handling = 'Detected as an unclassified anomaly. The model sees that something is wrong but cannot say what, so the advice is generic.'; }
   else { outcome = 'misnamed'; handling = `Detected, but named "${T.label}", which is wrong. ${F.truth || ''} The cause, checks and actions shown to the operator would be for the wrong problem.`; }
+  if (issue && issue.type !== 'sensor' && (ex.confidence_note || held)) handling += ` ${ex.confidence_note || 'The diagnosis was marked low confidence.'}${held ? ' The machine action carried a low-confidence warning and was not approved; this run assumes the manager heeds that warning.' : ''}`;
   if (outcome === 'misnamed' && responded && actuator.commands.length) note += ' The machine was stopped for a problem it did not have.';
   if (issue && flags.length) handling += ` The activity monitor also flagged "${flags[0].title}" at minute ${Math.floor(flags[0].m)}.`;
 
   return {
     delayMin: tooLate ? null : delayMin, failedFirst: tooLate, detected: !!issue, detectMin: det === null ? null : (det - WARMUP) / TICKS_PER_MIN,
-    type: issue ? issue.type : null, label: T ? T.label : null, title: T ? T.title : null, outcome, handling,
+    type: issue ? issue.type : null, label: T ? T.label : null, title: issue ? (issue.title || T.title) : null, original: ex.original || null, outcome, handling, flagAlerts,
     severity: issue ? issue.severity : null, confidence: issue ? issue.confidence : null, loss: Math.round(total), note,
     downtimeMin: Math.round((issue ? issue.downtime_h : shadowDown) * 60), scrapKg: Math.round(issue ? issue.scrap_kg : shadowScrap), flags,
     notified: db.prepare('SELECT u.name, n.channel, n.level, n.sent_at FROM notifications n JOIN users u ON u.id = n.user_id ORDER BY n.id').all().map((n) => ({ name: n.name, channel: n.channel, level: n.level, m: minute(n.sent_at) })),
@@ -109,7 +124,13 @@ function runScenario(params, { model, modelVersionId = null, costs = null, ttfMi
   const early = runOne({ ...base, delayMin: p.responseMin });
   const late = runOne({ ...base, delayMin: p.responseMin + p.lateMin });
   const never = runOne({ ...base, delayMin: null });
-  return { simulated: true, params: p, scenario: F.name, trained: !F.untrained, truth: F.truth || null, early, late, never };
+  return { simulated: true, params: p, scenario: F.name, trained: !F.untrained, truth: F.truth || null, before: BEFORE_CROSSCHECK[p.fault] || null, early, late, never };
 }
 
-module.exports = { runScenario, runOne, DEFAULT_TTF };
+// Runs the five untrained scenarios with default settings and pairs each with its recorded result from before the cross-check.
+function crossCheckComparison(ctx) {
+  return Object.keys(BEFORE_CROSSCHECK).map((key) => { const r = runScenario({ fault: key }, ctx), v = r.early;
+    return { key, name: r.scenario, truth: r.truth, before: r.before, after: { outcome: v.outcome, text: v.handling, detectMin: v.detectMin, shown: v.title, confidence: v.confidence, losses: { early: r.early.loss, late: r.late.loss, never: r.never.loss } } }; });
+}
+
+module.exports = { runScenario, runOne, crossCheckComparison, DEFAULT_TTF, BEFORE_CROSSCHECK };
