@@ -75,6 +75,7 @@ test('a jam shows where the problem is in the chain and starves packaging', () =
   const v = chain.view(eng);
   assert.equal(v.stages.find((s) => s.id === 'forming').status, 'fault'); assert.equal(v.stages.find((s) => s.id === 'conveyor').status, 'fault');
   assert.equal(v.stages.find((s) => s.id === 'packaging').status, 'waiting'); assert.equal(v.problem_at, 'Forming (AP800)');
+  assert.equal(v.freezer_risk, null, 'no product is arriving, so the freezer is not being loaded');
 });
 test('the chain view is safe to read in the instant after a repair, before the next reading', () => {
   const { eng, run } = rig(); run(40); eng.injectFault('jam', U.op); run(30);

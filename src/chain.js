@@ -107,7 +107,7 @@ function view(eng) {
   const A = eng.aux; if (!A) return null;
   const limit = entryLimit(eng.db), st = eng.state(eng.seq), m = st.machine, a = st.active;
   const r1 = (x) => +x.toFixed(1);
-  const warm = A.entry > limit, jam = !!a && a.type === 'jam';
+  const warm = A.packed > 100 && A.entry > limit, jam = !!a && a.type === 'jam';   // only product that is actually arriving can load the freezer
   const formingStatus = m.stopped ? 'stopped' : a ? (['critical', 'high'].includes(a.severity) ? 'fault' : 'warning') : 'ok';
   const stages = [
     { id: 'forming', name: 'Forming (AP800)', status: formingStatus, detail: m.stopped ? 'Machine stopped' : a ? a.title : eng.ew ? `${Math.round(eng.ew.rate)} kg/h` : 'Restarting', source: 'Line PLC — OPC UA' },

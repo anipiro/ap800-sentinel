@@ -3,24 +3,19 @@
 <style>
 /* Layout: operator screen. Status bar and tabs on top; each tab is one working view. Stacks to one column on a phone. */
 :root{
-  --bg:#EDF0F3; --panel:#FFFFFF; --fg:#16202B; --muted:#55626E; --line:#C7CFD8;
-  --accent:#1D5BB8; --accent-soft:#DCE8F8; --dough:#F3EAD0;
-  --ok:#2B7A4B; --ok-soft:#DDF0E4; --warn:#A8690F; --warn-soft:#FBEBCB; --crit:#B93226; --crit-soft:#FADCD8;
+  /* Nikora palette: white ground, brand red as the one accent, dark grey text, light pink for highlighted panels.
+     Machine status keeps its own green / amber / dark red so "critical" never reads as mere branding. */
+  --page:#FFFFFF; --bg:#F6F4F3; --panel:#FFFFFF; --fg:#1D1D1D; --muted:#5E5A59; --line:#E2DDDB;
+  --accent:#E60000; --accent-soft:#FFF4F2; --dough:#F3EAD0;
+  --ok:#1B7A43; --ok-soft:#E3F3E9; --warn:#A86400; --warn-soft:#FFF0D2; --crit:#8A0F0F; --crit-soft:#F6D9D6;
   --sim:#6B3FA0; --sim-soft:#EFE7F9;   /* simulated or projected data, never used for real records */
   --display:"Archivo","Arial Narrow",Arial,sans-serif;
   --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+  color-scheme:light;
 }
-@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
-  --bg:#11171E; --panel:#19212B; --fg:#E5EAF0; --muted:#97A4B0; --line:#2F3B48;
-  --accent:#74A9F5; --accent-soft:#1E3352; --dough:#3A3424;
-  --sim:#C4A3F2; --sim-soft:#2D2141; --ok:#5CC389; --ok-soft:#17382A; --warn:#E0A84A; --warn-soft:#40300F; --crit:#F07A6E; --crit-soft:#4A1E1A; color-scheme:dark } }
-:root[data-theme="dark"]{
-  --bg:#11171E; --panel:#19212B; --fg:#E5EAF0; --muted:#97A4B0; --line:#2F3B48;
-  --accent:#74A9F5; --accent-soft:#1E3352; --dough:#3A3424;
-  --sim:#C4A3F2; --sim-soft:#2D2141; --ok:#5CC389; --ok-soft:#17382A; --warn:#E0A84A; --warn-soft:#40300F; --crit:#F07A6E; --crit-soft:#4A1E1A; color-scheme:dark }
 
 [hidden]{display:none!important}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45}
+body{margin:0;background:var(--page);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45}
 .app{max-width:1440px;margin:0 auto;padding-block:18px 48px;
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
   display:flex;flex-direction:column;gap:14px}
@@ -165,6 +160,37 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
 .people{display:flex;flex-direction:column;gap:8px}
 .people button{display:flex;justify-content:space-between;gap:12px;text-align:left;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:6px;font-weight:500}
 .people button:hover{border-color:var(--fg)}
+
+/* ---- Nikora treatment ---- */
+.bar{background:var(--accent);color:#fff;border-bottom:0;border-radius:6px;padding:14px 18px}
+.bar h1{color:#fff}
+.bar .brand .muted,.bar .stats dt{color:rgba(255,255,255,.86)}
+.bar .stats dd{color:#fff}
+.bar .pill{background:#fff}
+.bar .btn.plain,.bar [data-i18n-skip] .btn{background:transparent;color:#fff;border-color:rgba(255,255,255,.75)}
+.bar .btn.plain:hover{background:rgba(255,255,255,.16)}
+.bar .btn[aria-pressed="true"]{background:#fff;color:var(--accent)}
+.tabs{border-bottom:2px solid var(--accent)}
+.tabs a[aria-current="page"]{background:var(--accent);color:#fff}
+.btn.go{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.go:hover{background:#C40000}
+.btn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+.kv.big dd,.variant b{color:var(--accent)}
+.panel{box-shadow:0 1px 2px rgba(29,29,29,.05)}
+.panel.demo,.ask,.login .people button:hover{background:var(--accent-soft)}
+.issue{background:var(--accent-soft)}
+.act{background:var(--panel);border:1px solid var(--line)}
+.people button{border-left:4px solid var(--accent)}
+.steps li.done{border-top-color:var(--ok)}
+/* critical is a darker red than the brand, solid, and carries a mark, so it is told apart by more than hue */
+.pill.high,.pill.critical,.pill.stopped{color:#fff;background:var(--crit);border-color:var(--crit)}
+.pill.high::before,.pill.critical::before,.pill.stopped::before{content:"!";width:auto;height:auto;border-radius:0;background:none;font-weight:700}
+.sev.critical,.sev.high{background:var(--crit);color:#fff;border-color:var(--crit)}
+.sev.critical::before,.sev.high::before{content:"! ";font-weight:700}
+.sev.medium,.sev.low{background:var(--warn-soft)}
+.sev.ok{background:var(--ok-soft)}
+.chart.bad{border-color:var(--crit);border-width:2px}
+.me .card{background:var(--panel)}
 @media print{.tabs,.bar .row,.noprint{display:none!important} body{background:#fff} .panel{border:0;padding:0}}
 </style>
 
