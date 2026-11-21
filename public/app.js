@@ -142,7 +142,7 @@
       if (activeSig !== 'none') { activeSig = 'none'; box.innerHTML = `<p class="empty">${state.machine.stopped ? 'The machine is stopped. Undo the stop on the last issue to restart it.' : 'No active issue. When the model detects a problem it appears here with the reason, the people alerted and the actions taken.'}</p>`; }
       return;
     }
-    const sig = JSON.stringify([a.id, a.title, a.low, a.note, a.sensorNote, a.severity, a.acked, a.level, state.actions.map((x) => x.status + x.warn), state.similar.map((k) => k.id), ME.role, state.machine.stopped]);
+    const sig = JSON.stringify([a.id, a.title, a.low, a.note, a.sensorNote, a.severity, a.acked, a.level, state.actions.map((x) => x.status + x.warn), state.similar.map((k) => k.id), state.parts.map((p) => p.stock), ME.role, state.machine.stopped]);
     if (sig !== activeSig) {
       activeSig = sig;
       box.innerHTML = `<div class="issue ${a.severity}">
@@ -161,6 +161,7 @@
         <div class="row">${a.acked ? '' : `<button class="btn go" data-issue="ack" data-id="${a.id}">Acknowledge</button>`}
           <a class="btn plain" href="#issue-${a.id}">Full record</a></div>
         ${state.similar.length ? `<div><span class="small muted">Similar past issues and how they were fixed</span><ul class="list">${state.similar.map((k) => `<li><a href="#issue-${k.issue_id}">Issue ${k.issue_id}</a>: ${esc(k.root_cause)}. Fix: ${esc(k.fix)}${k.parts ? `. Parts: ${esc(k.parts)}` : ''}${k.minutes !== null ? `. Took ${k.minutes} min` : ''}</li>`).join('')}</ul></div>` : ''}
+        ${state.parts.length ? `<div><span class="small muted">Parts for this repair</span><ul class="list">${state.parts.map((p) => `<li>${p.warning ? `<span class="warnline">${esc(p.warning)}</span>` : `${esc(p.name)}: ${p.stock} in stock`}</li>`).join('')}</ul></div>` : ''}
         ${can('technician') ? `<div class="form" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))"><label>Root cause<input id="a-cause" placeholder="What was really wrong"></label><label>Fix<input id="a-note" placeholder="What was done"></label><label>Parts used<input id="a-parts" placeholder="None"></label><label>Time taken, minutes<input id="a-mins" type="number" min="0"></label></div><div class="row"><button class="btn" data-issue="resolve" data-id="${a.id}">Mark resolved</button><span class="small muted">Saved to the knowledge base for next time</span></div>` : ''}
         <p class="err"></p></div>`;
     }
@@ -312,7 +313,7 @@
 
   let kpiPeriod = '24h';
   async function viewSummary() {
-    const s = await api('api/summary'), k = await api('api/kpis?period=' + kpiPeriod);
+    const s = await api('api/summary'), k = await api('api/kpis?period=' + kpiPeriod), ho = await api('api/handover');
     const pc = (x) => (x === null ? 'n/a' : (x * 100).toFixed(1) + ' %'), hrs = (x) => (x === null ? 'n/a' : x + ' h');
     $('#v-summary').innerHTML = `<section class="panel"><div class="head"><h2>Key figures</h2><label class="row small noprint" for="kpi-period">Period <select id="kpi-period">${[['1h', 'Last hour'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days']].map(([v, l]) => `<option value="${v}" ${v === kpiPeriod ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
         <dl class="kv big"><div><dt>OEE</dt><dd>${pc(k.oee)}</dd></div><div><dt>Availability</dt><dd>${pc(k.availability)}</dd></div><div><dt>Performance</dt><dd>${pc(k.performance)}</dd></div><div><dt>Quality</dt><dd>${pc(k.quality)}</dd></div>
@@ -324,6 +325,9 @@
           <div><dt>Automatic actions</dt><dd>${s.actions_auto}</dd></div><div><dt>Approved by a manager</dt><dd>${s.actions_approved}</dd></div>
           <div><dt>Average time to acknowledge</dt><dd>${mins(s.avg_ack_ms)}</dd></div><div><dt>Average time to fix</dt><dd>${mins(s.avg_fix_ms)}</dd></div><div><dt>Escalations</dt><dd>${s.escalations}</dd></div>
           <div><dt>Losses</dt><dd>${money(s.loss)}</dd></div><div><dt>Saved by early detection</dt><dd>${money(s.savings)}</dd></div></dl></section>
+      <section class="panel"><div class="head"><h2>Shift handover</h2><span class="small muted">${esc(ho.shift)}, since ${clock(ho.since)}</span></div>
+        <dl class="kv"><div><dt>Issues this shift</dt><dd>${ho.counts.issues}</dd></div><div><dt>Still open</dt><dd>${ho.counts.open}</dd></div><div><dt>Open work orders</dt><dd>${ho.counts.work_orders_open}</dd></div><div><dt>Downtime</dt><dd>${ho.counts.downtime_min} min</dd></div><div><dt>Losses</dt><dd>${money(ho.counts.loss)}</dd></div></dl>
+        <div class="half"><div><h3>What happened</h3><ul class="list">${ho.happened.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div><div><h3>For the next shift to watch</h3><ul class="list">${ho.watch.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div></div></section>
       <section class="panel"><h2>What stands out</h2><ul class="list" style="font-size:1rem;gap:8px">${s.insights.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
         <p class="note">Times use the demo clock. Money figures come from placeholder cost settings.</p></section>`;
     $('#kpi-period').onchange = (e) => { kpiPeriod = e.target.value; viewSummary(); };
@@ -549,7 +553,7 @@
     return '';
   }
   async function viewWork() {
-    const d = await api('api/workorders'), el = $('#v-work');
+    const d = await api('api/workorders'), el = $('#v-work'), stock = await api('api/parts');
     const open = d.orders.filter((o) => o.status !== 'completed' && o.status !== 'verified').sort((a, b) => a.window_start - b.window_start);
     el.innerHTML = `<section class="panel"><div class="head"><h2>Maintenance calendar</h2><span class="small muted">Peak production ${d.peak.map(([a, b]) => `${a}:00 to ${b}:00`).join(' and ')} (placeholder hours)</span></div>
         ${table(['Day', 'Suggested window', 'Work order', 'Assigned to', 'Why this window'], open.map((o) => `<tr><td>${dayName(o.window_start)}</td><td><b>${hm(o.window_start)} to ${hm(o.window_end)}</b>${o.in_peak ? ' <span class="sev critical">in peak</span>' : ''}<br><span class="small muted">must finish by ${hm(o.deadline)}, ${dayName(o.deadline)}</span></td><td>${o.id}: ${esc(o.title)}</td><td>${esc((o.assignee || 'nobody yet').replace(/ \(.*/, ''))}</td><td class="small">${esc(o.window_reason)}</td></tr>`))}
@@ -558,8 +562,12 @@
         ${table(['No.', 'Work order', 'Progress', 'Assigned to', 'Issue', ''], d.orders.map((o) => `<tr><td>${o.id}</td><td>${esc(o.title)}<br><span class="small muted">${o.duration_h} h job, created ${stamp(o.created_at)}${o.notes ? ', done: ' + esc(o.notes) : ''}</span></td>
           <td><div class="flow">${WO_STEPS.map((s, i) => `<span class="${s === o.status ? 'on' : i < WO_STEPS.indexOf(o.status) ? 'past' : ''}">${WO_NAME[s]}</span>`).join('')}</div></td>
           <td>${esc((o.assignee || '').replace(/ \(.*/, ''))}</td><td>${o.issue_id ? `<a href="#issue-${o.issue_id}">${o.issue_id}</a>` : ''}</td><td><span class="row">${woButtons(o, d.people)}</span></td></tr>`))}
-        <p class="err"></p></section>`;
+        <p class="err"></p></section>
+      <section class="panel"><div class="head"><h2>Spare parts</h2><span class="small muted">Placeholder stock figures</span></div>
+        ${table(['Part', 'Needed for', '#In stock', '#Minimum', '#Delivery', 'Status', ''], stock.map((p) => `<tr><td>${esc(p.name)}</td><td>${esc(p.used_for.join(', '))}</td><td class="num">${p.stock}</td><td class="num">${p.min_stock}</td><td class="num">${p.lead_time_days} days</td><td>${p.level === 'ok' ? '<span class="sev ok">in stock</span>' : p.level === 'low' ? '<span class="sev medium">at minimum, reorder</span>' : '<span class="sev critical">out of stock, order now</span>'}</td><td>${can('manager') ? `<span class="row"><input id="st-${p.id}" type="number" min="0" value="${p.stock}" aria-label="Stock of ${esc(p.name)}" style="width:5em"><button class="btn plain" data-part="${p.id}">Set stock</button></span>` : ''}</td></tr>`))}
+        <p class="note">When an issue needs a part that is at or below its minimum, the warning also appears on the issue.</p><p class="err"></p></section>`;
     el.onclick = (e) => {
+      const pb = e.target.closest('button[data-part]'); if (pb) return act(pb, 'api/parts/stock', { id: Number(pb.dataset.part), stock: Number($('#st-' + pb.dataset.part).value) });
       const b = e.target.closest('button[data-wo]'); if (!b) return;
       const id = b.dataset.wo, body = {};
       if (b.dataset.op === 'assign' && $('#wo-who-' + id)) body.user_id = Number($('#wo-who-' + id).value);

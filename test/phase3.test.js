@@ -101,3 +101,36 @@ test('knowledge base: fixes are recorded on resolve and offered on the next simi
   assert.equal(kb.search(db, 'transfer').length, 1); assert.equal(kb.search(db, 'gearbox').length, 0); assert.equal(kb.search(db, '').length, 1);
   assert.equal(kb.search(db, 'belt')[0].label, 'Belt jam');
 });
+
+// ---- spare parts and shift handover ---------------------------------------------
+const parts = require('../src/parts');
+test('spare parts: a needed part that is low or out raises a warning with its delivery time', () => {
+  const { db, eng } = rig();
+  const jam = parts.forIssueType(db, 'jam');
+  assert.equal(jam.length, 1); assert.equal(jam[0].level, 'out'); assert.match(jam[0].warning, /Exit belt: none in stock.*delivery takes 10 days/);
+  assert.match(parts.forIssueType(db, 'bearing')[0].warning, /which is the minimum.*14 days/);
+  assert.equal(parts.forIssueType(db, 'block')[0].warning, null);
+  assert.deepEqual(parts.forIssueType(db, 'tear'), []);
+  assert.throws(() => parts.setStock(eng, 2, 3, U.tech), Forbidden);
+  assert.throws(() => parts.setStock(eng, 2, -1, U.mgr), /whole number/);
+  parts.setStock(eng, 2, 3, U.mgr);
+  assert.equal(parts.forIssueType(db, 'jam')[0].warning, null);
+  assert.equal(parts.list(db).find((p) => p.id === 2).level, 'ok');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action = 'set_part_stock'").get().n, 1);
+});
+test('shift handover lists what happened, what is open and what to watch', () => {
+  const { db, eng, run } = rig();
+  let h = parts.handover(db, eng.now());
+  assert.equal(h.shift, 'Day shift (08:00 to 20:00)'); assert.deepEqual(h.happened, ['No issues this shift.']);
+  assert.ok(h.watch.some((w) => /Exit belt is out of stock/.test(w)));
+  run(30); eng.injectFault('jam', U.op); run(20);
+  h = parts.handover(db, eng.now());
+  assert.equal(h.counts.issues, 1); assert.equal(h.counts.open, 1); assert.equal(h.counts.work_orders_open, 1);
+  assert.match(h.happened[0], /Exit belt jammed \(critical\): still open/);
+  assert.ok(h.watch.some((w) => /Open issue: Exit belt jammed, not yet acknowledged/.test(w)));
+  assert.ok(h.watch.some((w) => /1 machine action is waiting for manager approval/.test(w)));
+  assert.ok(h.watch.some((w) => /Work order 1 .* is created, not assigned/.test(w)));
+  eng.resolve(eng.active.id, U.tech, { note: 'Cleared' });
+  h = parts.handover(db, eng.now());
+  assert.equal(h.counts.open, 0); assert.match(h.happened[0], /fixed by Giorgi/); assert.ok(h.counts.loss > 0);
+});
