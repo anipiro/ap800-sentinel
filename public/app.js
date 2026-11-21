@@ -129,11 +129,29 @@
     if (ph.hist.length) { $('#dev-val').textContent = ph.hist[ph.hist.length - 1].toFixed(2); drawSeries($('#dev-cv'), ph.hist, null, null, col, 120); }
   }
 
+  // Wrap a panel in a closed "Details" section. Charts inside draw themselves once it is opened.
+  function fold(el, title, onOpen) {
+    if (!el || el.parentElement.classList.contains('more')) return null;
+    const d = document.createElement('details'); d.className = 'more';
+    const s = document.createElement('summary'); s.textContent = title; d.appendChild(s);
+    el.parentElement.insertBefore(d, el); d.appendChild(el);
+    d.addEventListener('toggle', () => { if (d.open) { if (onOpen) onOpen(); else if (state && ticks.length) { const v = ticks[ticks.length - 1].v; renderCharts(v); renderChain(); } } });
+    return d;
+  }
+  function foldLive() {
+    fold($('#line').closest('section'), 'Details: each station and its readings');
+    fold($('#charts').closest('section'), 'Details: signals and where they come from');
+    fold($('#aux-charts').closest('section'), 'Details: motor drive and blast freezer');
+    fold($('#dev-chart').closest('section'), 'Details: phone sensor');
+  }
+
   // ---- line chain, motor drive, freezer (simulated) -----------------------------
   function renderChain() {
     const c = state.chain; if (!c) return;
     const word = { ok: 'OK', warning: 'Warning', fault: 'Fault', stopped: 'Stopped', waiting: 'Waiting' };
     $('#chain').innerHTML = c.stages.map((s) => `<div class="stage ${s.status}"><b>${esc(s.name)}</b><span class="sev ${s.status === 'ok' ? 'ok' : s.status === 'warning' ? 'medium' : s.status === 'waiting' ? 'none' : 'critical'}" style="align-self:flex-start">${word[s.status]}</span><span class="small">${esc(s.detail)}</span><span class="src">${esc(s.source)}</span></div>`).join('');
+    $('#h-health').textContent = state.machine.health; $('#h-health').style.color = state.machine.status === 'ok' ? 'var(--ok)' : ['medium', 'low'].includes(state.machine.status) ? 'var(--warn)' : 'var(--crit)';
+    $('#h-status').textContent = sevLabel[state.machine.status]; $('#h-out').textContent = ticks.length ? `${Math.round(ticks[ticks.length - 1].v.rate)} of ${state.machine.target} kg/h` : '';
     $('#chain-note').textContent = c.problem_at ? `Problem at: ${c.problem_at}. ${c.freezer_risk || ''}` : 'No problem anywhere in the chain.';
     const col = colours(), v = c.values;
     AUX.forEach(([k, dp]) => {
@@ -324,8 +342,26 @@
       <section class="panel"><div class="head"><h2>Readings before, during and after</h2><span class="small muted">Red = flagged by the model</span></div><div class="charts big">${keys.map((k) => `<div class="chart"><span class="lab">${SIG[k].label} (${SIG[k].unit})</span><canvas id="ic-${k}"></canvas></div>`).join('')}</div></section>
       <section class="panel"><div class="head"><h2>Replay this incident</h2><span class="small muted">Real record, minute by minute on the demo clock</span></div><div id="iss-replay"></div></section>
       <section class="panel"><h2>Timeline</h2>${table(['Time', 'Who or what', 'What happened'], i.events.map((e) => `<tr><td>${clock(e.ts)}</td><td>${esc(e.actor)} <span class="muted">(${e.actor_type})</span></td><td>${esc(e.summary)}</td></tr>`))}</section>`;
+    // summary first: what is wrong, how long, what it costs, what to do, and the buttons
+    const live = i.status === 'detected' || i.status === 'acknowledged';
+    const liveActs = live && state && state.active && state.active.id === i.id ? state.actions : [];
+    const ttf = live && state && state.active && state.active.id === i.id ? state.active.rul : i.rul_min;
+    const gist = document.createElement('section'); gist.className = 'panel';
+    gist.innerHTML = `<div class="head"><h2>Issue ${i.id}: ${esc(i.title)}</h2><span class="row"><span class="sev ${i.severity}">${i.severity}</span><span class="sev none">${statusText[i.status]}</span></span></div>
+      <div class="gist"><div><span class="q">What is wrong</span><span class="a">${esc(ex.summary || i.cause)}</span></div>
+        <div><span class="q">How long until it fails</span><span class="n">${ttf === null || ttf === undefined ? 'Not predicted' : Math.round(ttf) + ' min'}</span><span class="small muted">${Math.round(i.fail_prob * 100)} % chance of failure if ignored</span></div>
+        <div><span class="q">What it costs</span><span class="n" style="color:var(--accent)">${money(i.actual_loss)}</span><span class="small muted">so far. ${money(i.projected_loss)} at risk if not fixed${i.savings ? ', ' + money(i.savings) + ' saved by acting early' : ''}</span></div>
+        <div><span class="q">What to do</span><span class="a">${esc(i.recommended)}</span><ul class="list">${i.check.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></div></div>
+      ${live ? `<div class="row">${i.acked_at ? '' : `<button class="btn go" data-g="issues/${i.id}/ack">Acknowledge</button>`}${liveActs.filter((a) => a.status === 'pending_approval' && can(a.risk === 'physical' ? 'manager' : 'technician')).map((a) => `<button class="btn" data-g="actions/${a.id}/approve">Approve: ${esc(a.label)}</button><button class="btn plain" data-g="actions/${a.id}/reject">Reject</button>`).join('')}${can('technician') ? `<button class="btn" data-g="issues/${i.id}/resolve">Mark resolved</button>` : ''}<a class="btn plain" href="#live">Open on Live</a></div>` : ''}<p class="err"></p>`;
+    el.insertBefore(gist, el.firstChild);
+    gist.onclick = (e) => { const b = e.target.closest('[data-g]'); if (b) act(b, 'api/' + b.dataset.g, { note: i.recommended }); };
     const col = colours(), flags = i.readings.map((r) => r.a);
-    keys.forEach((k) => drawSeries($('#ic-' + k), i.readings.map((r) => r.v[k]), flags, BASE[k], col));
+    const drawAll = () => keys.forEach((k) => drawSeries($('#ic-' + k), i.readings.map((r) => r.v[k]), flags, BASE[k], col));
+    drawAll();
+    // everything else folds away
+    const kids = [...el.children].filter((n) => n !== gist);
+    const titles = ['Details: timings, confidence and feedback', 'Details: evidence, actions and people alerted', 'Details: root cause and similar past issues', 'Details: readings before, during and after', 'Details: replay', 'Details: timeline'];
+    kids.forEach((n, ix) => fold(n, titles[ix] || 'Details', () => { drawAll(); const pos = el.querySelector('#iss-replay [data-r=pos]'); if (pos && pos.oninput) pos.oninput(); }));
     mountReplay($('#iss-replay'), { points: i.readings.map((r) => ({ m: (r.ts - i.detected_at) / 1000, v: r.v, a: r.a })), events: i.events.map((e) => ({ m: (e.ts - i.detected_at) / 1000, summary: e.summary })) }, false);
     const vb = $('#verify'); if (vb) vb.onclick = () => act(vb, `api/issues/${i.id}/verify`);
     el.querySelectorAll('[data-fb]').forEach((b) => { b.onclick = () => act(b, `api/issues/${i.id}/feedback`, { verdict: b.dataset.fb }); });
@@ -577,14 +613,14 @@
     const free = d.orders.filter((o) => o.status === 'created');
     const card = (o) => `<div class="card ${o.severity || ''}"><b>${o.id}: ${esc(o.title)}</b><span class="small muted">${WO_NAME[o.status]}, window ${hm(o.window_start)} to ${hm(o.window_end)} on ${dayName(o.window_start)}${o.in_peak ? ', in peak' : ''}, ${o.duration_h} h job</span>
       <div class="row">${woButtons(o, d.people)}${o.issue_id ? `<a class="btn plain" href="#issue-${o.issue_id}">Issue ${o.issue_id}</a>` : ''}</div></div>`;
-    el.innerHTML = `<section class="panel"><div class="head"><h2>Machine now</h2><span class="sev ${state ? (state.machine.status === 'ok' ? 'ok' : state.machine.status === 'stopped' ? 'critical' : state.machine.status) : 'none'}">${state ? sevLabel[state.machine.status] : ''}</span></div>
+    el.innerHTML = `<div class="col"><section class="panel"><div class="head"><h2>Machine now</h2><span class="sev ${state ? (state.machine.status === 'ok' ? 'ok' : state.machine.status === 'stopped' ? 'critical' : state.machine.status) : 'none'}">${state ? sevLabel[state.machine.status] : ''}</span></div>
         ${a ? `<div class="card ${a.severity}"><b>${esc(a.title)}</b><span class="small muted">${a.severity}, ${Math.round(a.confidence * 100)} % confidence, detected ${clock(a.detectedAt)}</span>
           <ul class="list">${a.check.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
           <div class="row">${a.acked ? '<span class="small">Acknowledged</span>' : `<button class="btn go" data-me-ack="${a.id}">Acknowledge</button>`}<a class="btn plain" href="#live">Open live view</a><a class="btn plain" href="#issue-${a.id}">Full record</a></div></div>` : '<p class="empty">No active issue.</p>'}
         <p class="err"></p></section>
       <section class="panel"><div class="head"><h2>My work orders</h2><span class="small muted">${mine.length} open</span></div>${mine.map(card).join('') || '<p class="empty">Nothing is assigned to you.</p>'}<p class="err"></p></section>
-      <section class="panel"><div class="head"><h2>Waiting to be taken</h2><span class="small muted">${free.length}</span></div>${free.map(card).join('') || '<p class="empty">No unassigned work orders.</p>'}<p class="err"></p></section>
-      <section class="panel"><h2>Machine QR code</h2>${machineQr()}</section>`;
+      </div><div class="col"><section class="panel"><div class="head"><h2>Waiting to be taken</h2><span class="small muted">${free.length}</span></div>${free.map(card).join('') || '<p class="empty">No unassigned work orders.</p>'}<p class="err"></p></section>
+      <section class="panel"><h2>Machine QR code</h2>${machineQr()}</section></div>`;
     el.onclick = (e) => {
       const b = e.target.closest('button'); if (!b) return;
       if (b.dataset.meAck) return act(b, `api/issues/${b.dataset.meAck}/ack`);
@@ -688,7 +724,7 @@
     $('#s-user').textContent = ME.name.replace(/ \(.*/, '') + ', ' + ME.role;
     document.querySelectorAll('#tabs a[data-role]').forEach((a) => { a.hidden = !can(a.dataset.role); });
     seq = 0; ticks.length = 0; activeSig = '';
-    buildLine(); buildCharts(); buildFaults();
+    buildLine(); buildCharts(); buildFaults(); foldLive();
     await poll(); route();
   }
 
