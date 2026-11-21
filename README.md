@@ -13,7 +13,7 @@ Open http://localhost:4800 and choose a person to sign in as. Needs Node 22.13 o
 | Command | What it does |
 |---|---|
 | `npm start` | Runs the website, the simulated machine and the detection engine |
-| `npm test` | Runs the test suite (12 tests) |
+| `npm test` | Runs the test suite (22 tests) |
 | `npm run train` | Retrains the detection model on fresh synthetic data. Restart the server afterwards |
 | `npm run reset` | Deletes the database so the next start is clean |
 
@@ -58,6 +58,13 @@ Model metrics are measured on synthetic test data from the same simulator. They 
 6. Open the issue's full record, then Losses, History and Summary.
 7. In a second browser, sign in as Nino (operator) to show that Losses and Setup are hidden and approval is refused.
 
+## Simulations and risk (Phase 2)
+
+- **Simulator tab** (technician and manager): pick a scenario, severity, speed, time of day and response delay. The run happens in a sandbox with its own in-memory database, mock notifiers and a mock actuator. It shows time to detection, who would be alerted, what would run, and the loss if caught early, caught late, or not acted on. Runs are stored in the `simulations` table only and can be replayed and exported.
+- **Risk tab**: Monte Carlo projection for 7, 30 and 90 days (2,000 random futures), risk ranking, heatmap and loss distribution. Event rates are placeholders that blend with recorded issue history.
+- **Unusual activity**: frozen sensor, energy use while stopped, running outside 06:00 to 22:00, a safeguard switched off, three or more rejected or undone actions in a day, a gap in the data. Each flag can be marked expected, investigated or escalated. Use the two test buttons on the Risk tab to trigger the first two.
+- Everything simulated or projected is drawn with a dashed violet border and a SIMULATED or PROJECTION tag.
+
 ## Layout
 
 ```
@@ -68,6 +75,9 @@ src/core.js          engine: issues, notifications, escalation, remediation, los
 src/adapters.js      notifier and actuator interfaces, real and mock
 src/loss.js          financial formulas
 src/reports.js       history, finance, summary queries
+src/sandbox.js       isolated failure scenario simulator
+src/risk.js          Monte Carlo risk projection
+src/unusual.js       unusual activity detection
 src/catalog.js       issue types, actions, cost assumptions
 migrations/          database schema
 test/                node:test suites

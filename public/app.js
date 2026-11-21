@@ -249,7 +249,7 @@
         <td><span class="sev ${i.severity}">${i.severity}</span></td><td>${statusText[i.status]}${i.resolved_by === 'system' ? ', cleared by itself' : ''}</td><td class="num">${Math.round(i.confidence * 100)} %</td>
         <td class="num">${(i.downtime_h * 60).toFixed(0)} min</td><td class="num">${money(i.actual_loss)}</td><td class="num">${money(i.savings)}</td></tr>`))}</section>`;
   }
-  document.addEventListener('click', (e) => { const r = e.target.closest('tr.click'); if (r) location.hash = r.dataset.href; });
+  document.addEventListener('click', (e) => { const r = e.target.closest('tr.click'); if (r && r.dataset.href) location.hash = r.dataset.href; });
 
   async function viewIssue(id) {
     const i = await api('api/issues/' + id), el = $('#v-issue'), ex = i.explanation;
@@ -271,9 +271,11 @@
         <section class="panel"><h2>Actions</h2>${table(['Action', 'Risk', 'Status', 'Decided by'], i.actions.map((a) => `<tr><td>${esc(a.label)}<br><span class="muted small">${esc(a.reason)}</span></td><td>${a.risk}</td><td>${a.status.replace('_', ' ')}</td><td>${esc(a.decided_name || (a.status === 'done' ? 'automatic' : ''))}</td></tr>`))}
           <h2>People alerted</h2>${table(['Person', 'Channel', 'Level', 'Sent', 'Status'], i.notifications.map((n) => `<tr><td>${esc(n.name)}</td><td>${n.channel.replace('_', '-')}</td><td>${n.level}</td><td>${clock(n.sent_at)}</td><td>${n.status.replace('_', ' ')}</td></tr>`))}</section></div>
       <section class="panel"><div class="head"><h2>Readings before, during and after</h2><span class="small muted">Red = flagged by the model</span></div><div class="charts big">${keys.map((k) => `<div class="chart"><span class="lab">${SIG[k].label} (${SIG[k].unit})</span><canvas id="ic-${k}"></canvas></div>`).join('')}</div></section>
+      <section class="panel"><div class="head"><h2>Replay this incident</h2><span class="small muted">Real record, minute by minute on the demo clock</span></div><div id="iss-replay"></div></section>
       <section class="panel"><h2>Timeline</h2>${table(['Time', 'Who or what', 'What happened'], i.events.map((e) => `<tr><td>${clock(e.ts)}</td><td>${esc(e.actor)} <span class="muted">(${e.actor_type})</span></td><td>${esc(e.summary)}</td></tr>`))}</section>`;
     const col = colours(), flags = i.readings.map((r) => r.a);
     keys.forEach((k) => drawSeries($('#ic-' + k), i.readings.map((r) => r.v[k]), flags, BASE[k], col));
+    mountReplay($('#iss-replay'), { points: i.readings.map((r) => ({ m: (r.ts - i.detected_at) / 1000, v: r.v, a: r.a })), events: i.events.map((e) => ({ m: (e.ts - i.detected_at) / 1000, summary: e.summary })) }, false);
     const vb = $('#verify'); if (vb) vb.onclick = () => act(vb, `api/issues/${i.id}/verify`);
   }
 
@@ -333,14 +335,132 @@
     $('#v-setup').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) act(b, 'api/settings', { key: b.dataset.key, value: b.dataset.on !== '1' }); };
   }
 
+  // ---- replay: step through an incident minute by minute ---------------------
+  // data: { points: [{ m, v, a, loss? }], events: [{ m, summary, actor? }] }  m = minutes from the start of the fault (demo clock)
+  let replayTimer = null;
+  function mountReplay(el, data, simulated) {
+    clearInterval(replayTimer);
+    const pts = data.points; if (!pts.length) { el.innerHTML = '<p class="empty">No readings stored for this incident.</p>'; return; }
+    const keys0 = Object.keys(pts[0].v).filter((k) => SIG[k]);
+    const spread = (k) => { let lo = Infinity, hi = -Infinity; for (const p of pts) { if (p.v[k] < lo) lo = p.v[k]; if (p.v[k] > hi) hi = p.v[k]; } return (hi - lo) / (BASE[k] ? BASE[k].sd : 1); };
+    const keys = [...new Set([...keys0.filter((k) => k !== 'rate' && k !== 'defect').sort((a, b) => spread(b) - spread(a)).slice(0, 3), 'rate', 'defect'])].filter((k) => keys0.includes(k));
+    el.innerHTML = `<div class="row"><button class="btn go" data-r="play">Play</button><input type="range" data-r="pos" min="0" max="${pts.length - 1}" value="${pts.length - 1}" aria-label="Position in the incident" style="flex:1 1 200px"><b data-r="clock" style="min-width:9ch;text-align:right"></b></div>
+      <div class="charts big">${keys.map((k) => `<div class="chart"><span class="lab">${SIG[k].label}</span><span class="val"><span data-rv="${k}"></span> <small>${SIG[k].unit}</small></span><canvas data-rc="${k}"></canvas></div>`).join('')}
+        ${pts[0].loss !== undefined ? '<div class="chart"><span class="lab">Loss so far</span><span class="val" data-r="loss"></span></div>' : ''}</div>
+      <div class="scroll" style="max-height:230px;overflow-y:auto"><table><tbody data-r="events"></tbody></table></div>`;
+    const q = (s) => el.querySelector(s), pos = q('[data-r=pos]'), flags = pts.map((p) => p.a);
+    const draw = () => {
+      const i = Number(pos.value), p = pts[i], col = colours();
+      q('[data-r=clock]').textContent = (p.m < 0 ? 'before' : 'minute ' + Math.floor(p.m));
+      keys.forEach((k) => { q(`[data-rv="${k}"]`).textContent = fmt(k, p.v[k]); drawSeries(q(`[data-rc="${k}"]`), pts.slice(0, i + 1).map((x) => x.v[k]), flags, BASE[k], col, pts.length); });
+      if (q('[data-r=loss]')) q('[data-r=loss]').textContent = money(p.loss);
+      const seen = data.events.filter((e) => e.m <= p.m);
+      q('[data-r=events]').innerHTML = seen.slice().reverse().map((e) => `<tr><td class="num">min ${Math.max(0, Math.floor(e.m))}</td><td>${esc(e.summary)}</td></tr>`).join('') || '<tr><td class="muted">Nothing has happened yet at this point.</td></tr>';
+    };
+    pos.oninput = draw;
+    q('[data-r=play]').onclick = (e) => {
+      if (replayTimer) { clearInterval(replayTimer); replayTimer = null; e.target.textContent = 'Play'; return; }
+      if (Number(pos.value) >= pts.length - 1) pos.value = 0;
+      e.target.textContent = 'Pause';
+      replayTimer = setInterval(() => { if (!document.body.contains(el) || Number(pos.value) >= pts.length - 1) { clearInterval(replayTimer); replayTimer = null; e.target.textContent = 'Play'; return; } pos.value = Number(pos.value) + 1; draw(); }, 120);
+    };
+    draw();
+  }
+
+  // ---- risk overview ---------------------------------------------------------
+  const pct = (x) => (x * 100).toFixed(x < 0.1 ? 1 : 0) + ' %';
+  async function viewRisk() {
+    const d = await api('api/risk'), p = d.projection, el = $('#v-risk'), h30 = p.horizons.find((h) => h.days === 30);
+    const maxShare = Math.max(...h30.histogram.map((b) => b.share));
+    const open = d.flags.filter((f) => !f.verdict || f.verdict === 'investigate');
+    const verdictText = { expected: 'Marked as expected', investigate: 'Being investigated', escalate: 'Escalated to the manager' };
+    el.innerHTML = `<section class="panel"><div class="head"><h2>Risk now</h2><span class="small muted">Live machine</span></div>
+        ${d.active ? `<div class="issue ${d.active.severity}"><div class="head"><h3>${esc(d.active.title)}</h3><span class="sev ${d.active.severity}">${d.active.severity}</span></div>
+          <dl class="kv"><div><dt>Chance of failure if ignored</dt><dd>${pct(d.active.fail_prob)}</dd></div><div><dt>Projected loss if not fixed</dt><dd>${money(d.active.projected_loss)}</dd></div><div><dt>Time to failure</dt><dd>${d.active.rul_min === null ? 'n/a' : Math.round(d.active.rul_min) + ' min'}</dd></div></dl>
+          <a class="btn plain" href="#issue-${d.active.id}" style="align-self:flex-start">Open the issue</a></div>` : '<p class="empty">No active issue on the machine.</p>'}
+        <h3>Unusual activity</h3>
+        ${d.flags.length ? `<div class="acts">${d.flags.map((f) => `<div class="act"><span style="flex:1 1 320px"><b>${esc(f.title)}</b> <span class="sev ${f.severity}">${f.severity}</span><br>${esc(f.explanation)}<br><span class="muted">${stamp(f.ts)}${f.verdict ? `, ${verdictText[f.verdict].toLowerCase()} by ${esc(f.verdict_by)}` : ''}</span></span>
+          ${!f.verdict || f.verdict === 'investigate' ? `<span class="row">${f.verdict ? '' : `<button class="btn plain" data-flag="${f.id}" data-v="investigate">Investigate</button>`}<button class="btn plain" data-flag="${f.id}" data-v="expected">Mark as expected</button><button class="btn" data-flag="${f.id}" data-v="escalate">Escalate</button></span>` : ''}</div>`).join('')}</div>`
+          : '<p class="empty">Nothing unusual recorded. The monitor watches for frozen sensors, energy use while stopped, running outside scheduled hours, loosened safeguards, repeated overrides and gaps in the data.</p>'}
+        <div class="row"><span class="small muted">Demo: test the monitor on the live simulated machine</span>
+          <button class="btn plain" data-quirk="freeze" aria-pressed="${d.quirk === 'freeze'}">Freeze the pressure sensor</button>
+          <button class="btn plain" data-quirk="idle_draw" aria-pressed="${d.quirk === 'idle_draw'}">Pump keeps drawing power when stopped</button>
+          <button class="btn plain" data-quirk="">Switch tests off</button></div>
+        <p class="note">Open flags: ${open.length}. A frozen sensor takes about 15 seconds to be flagged. The power test only shows while the machine is stopped.</p><p class="err"></p></section>
+      <section class="panel sim"><div class="head"><h2>Projected losses</h2><span class="simtag">PROJECTION from ${p.runs} simulated futures</span></div>
+        ${table(['Next', '#Chance of a failure nobody catches', '#Expected loss', '#Likely range (5th to 95th percentile)', '#Expected loss without monitoring'], p.horizons.map((h) => `<tr><td>${h.days} days</td><td class="num">${pct(h.p_failure)}</td><td class="num">${money(h.expected_loss)}</td><td class="num">${money(h.p5)} to ${money(h.p95)}</td><td class="num">${money(h.expected_loss_without_monitoring)}</td></tr>`))}
+        <p class="note">${esc(p.assumptions)}</p></section>
+      <div class="half"><section class="panel sim"><div class="head"><h2>Risk ranking, next 30 days</h2><span class="simtag">PROJECTION</span></div>
+          ${table(['Risk', 'Station', '#Expected events', '#Chance of at least one', '#Expected loss', '#Cost if missed'], p.ranking.map((r) => `<tr><td>${esc(r.label)}</td><td>${esc((STATIONS.find((s) => s.id === r.station) || {}).name || '')}</td><td class="num">${r.events_30d}</td><td class="num">${pct(r.p_event_30d)}</td><td class="num">${money(r.expected_loss_30d)}</td><td class="num">${money(r.cost_if_missed)}</td></tr>`))}</section>
+        <section class="panel sim"><div class="head"><h2>Loss distribution, next 30 days</h2><span class="simtag">PROJECTION</span></div>
+          <div class="hist" role="img" aria-label="Histogram of simulated 30-day losses from ${money(h30.histogram[0].from)} to ${money(h30.histogram[h30.histogram.length - 1].to)}, most likely around ${money(h30.expected_loss)}">${h30.histogram.map((b) => `<i style="height:${Math.max(1, (100 * b.share) / maxShare)}%" title="${money(b.from)} to ${money(b.to)}: ${pct(b.share)} of futures"></i>`).join('')}</div>
+          <div class="head small muted"><span>${money(h30.histogram[0].from)}</span><span>expected ${money(h30.expected_loss)}</span><span>${money(h30.histogram[h30.histogram.length - 1].to)}</span></div></section></div>
+      <section class="panel sim"><div class="head"><h2>Risk heatmap: chance of each problem, week by week</h2><span class="simtag">PROJECTION</span></div>
+        <div class="scroll"><table class="heat"><thead><tr><th>Risk</th>${p.heatmap[0].weeks.map((_, i) => `<th class="num">W${i + 1}</th>`).join('')}</tr></thead><tbody>
+          ${p.heatmap.map((r) => `<tr><td>${esc(r.label)}</td>${r.weeks.map((w) => `<td class="num" style="background:color-mix(in srgb, var(--crit) ${Math.round(w * 85)}%, transparent)">${Math.round(w * 100)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+        <p class="note">Numbers are percent chance of at least one event in that week. Darker means more likely.</p></section>`;
+    el.onclick = (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.flag) act(b, `api/flags/${b.dataset.flag}/verdict`, { verdict: b.dataset.v });
+      if (b.dataset.quirk !== undefined) act(b, 'api/demo/quirk', { quirk: b.dataset.quirk || null });
+    };
+  }
+
+  // ---- failure scenario simulator (sandbox) ----------------------------------
+  let simResult = null, simVariant = 'early';
+  function renderSim() {
+    const box = $('#sim-out'); if (!box) return;
+    if (!simResult) { box.innerHTML = '<p class="empty">Choose a scenario and run it. The run happens in a sandbox: it cannot alert real people, stop the machine or appear in the real history.</p>'; return; }
+    const r = simResult, names = { early: 'Caught early', late: 'Caught late', never: 'Nobody acts' }, v = r[simVariant], e = r.early;
+    box.innerHTML = `<div class="head"><h2>Run ${r.id}: ${esc(r.scenario)}</h2><span class="simtag">SIMULATED, not real data</span></div>
+      <p>${e.detected ? `The model detected it <b>${e.detectMin} min</b> after it started, named it "${esc(e.label)}" (${e.severity}) with ${Math.round(e.confidence * 100)} % confidence.` : '<b>The model did not detect this scenario.</b> At this severity the readings stay inside the normal band.'}</p>
+      <div class="three">${['early', 'late', 'never'].map((k) => `<button class="variant" data-variant="${k}" aria-pressed="${k === simVariant}"><span class="small muted">${names[k]}${r[k].delayMin !== null && r[k].delayMin !== undefined ? `, response after ${r[k].delayMin} min` : ''}</span><b>${money(r[k].loss)}</b><span class="small">${esc(r[k].note)}</span></button>`).join('')}</div>
+      <div class="half"><div><h3>Who would be alerted (${names[simVariant].toLowerCase()})</h3>${table(['Minute', 'Person', 'Channel', 'Level'], v.notified.map((n) => `<tr><td class="num">${Math.floor(n.m)}</td><td>${esc(n.name)}</td><td>${n.channel.replace('_', '-')}</td><td>${n.level}</td></tr>`))}</div>
+        <div><h3>What the system would do</h3>${table(['Action', 'Outcome'], v.actions.map((a) => `<tr><td>${esc(a.label)}</td><td>${a.status === 'done' ? (a.risk === 'physical' ? 'Run after manager approval' : 'Run automatically') : a.status === 'pending_approval' ? 'Still waiting for approval' : a.status.replace('_', ' ')}</td></tr>`))}
+          <p class="note">Downtime ${v.downtimeMin ?? 'n/a'} min, scrap ${v.scrapKg ?? 'n/a'} kg, escalations ${v.escalations}. ${v.mockMessages} alerts and ${v.mockCommands} machine commands went to sandbox mocks only.</p></div></div>
+      <h3>Replay, ${names[simVariant].toLowerCase()}</h3><div id="sim-replay"></div>`;
+    mountReplay($('#sim-replay'), v, true);
+  }
+  async function viewSim() {
+    const runs = await api('api/sim/runs'), el = $('#v-sim');
+    const hours = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === 10 ? 'selected' : ''}>${String(h).padStart(2, '0')}:00${h >= 8 && h < 20 ? ' (day shift)' : ' (night shift)'}</option>`).join('');
+    el.innerHTML = `<section class="panel"><div class="head"><h2>What could go wrong</h2><span class="small muted">Sandbox, separate from the live machine</span></div>
+        <form class="form" id="sf"><label>Scenario<select id="sf-fault" name="fault">${Object.entries(FAULTS).map(([k, n]) => `<option value="${k}" ${k === 'bearing' ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+          <label>How severe (1 = typical)<input id="sf-sev" name="severity" type="number" min="0.2" max="2" step="0.1" value="1"></label>
+          <label>How fast it develops (1 = typical)<input id="sf-speed" name="speed" type="number" min="0.25" max="4" step="0.25" value="1"></label>
+          <label>Time of day<select id="sf-hour" name="startHour">${hours}</select></label>
+          <label>Response delay, minutes<input id="sf-resp" name="responseMin" type="number" min="0" max="240" value="10"></label>
+          <label>A late response is this many minutes later<input id="sf-late" name="lateMin" type="number" min="1" max="480" value="120"></label>
+          <label style="flex-direction:row;align-items:center;gap:8px;color:var(--fg);font-size:.9rem"><input id="sf-peak" name="peak" type="checkbox"> During peak production (value per hour × 1.5)</label>
+          <div class="row" style="align-items:end"><button class="btn go">Run scenario</button></div></form><p class="err"></p></section>
+      <section class="panel sim" id="sim-out"></section>
+      <section class="panel sim"><div class="head"><h2>Stored runs</h2><span class="row"><span class="simtag">SIMULATED</span><a class="btn plain" href="api/sim/runs.csv">Export CSV</a></span></div>
+        ${table(['Run', 'When', 'By', 'Scenario', 'Settings', '#Detected after', '#Caught early', '#Caught late', '#Nobody acts'], runs.map((r) => `<tr class="click" data-run="${r.id}"><td>${r.id}</td><td>${stamp(r.created_at)}</td><td>${esc((r.created_by || '').replace(/ \(.*/, ''))}</td><td>${esc(r.scenario)}</td>
+          <td class="small">severity ${r.params.severity}, speed ${r.params.speed}, ${String(r.params.startHour).padStart(2, '0')}:00${r.params.peak ? ', peak' : ''}, response ${r.params.responseMin} min, late +${r.params.lateMin} min</td>
+          <td class="num">${r.detect_min === null ? 'not detected' : r.detect_min + ' min'}</td><td class="num">${money(r.loss_early)}</td><td class="num">${money(r.loss_late)}</td><td class="num">${money(r.loss_never)}</td></tr>`))}
+        <p class="note">Select a row to load that run and compare. Stored runs are kept apart from the real issue list and history.</p></section>`;
+    renderSim();
+    $('#sf').onsubmit = async (e) => {
+      e.preventDefault(); const btn = e.target.querySelector('button'), f = Object.fromEntries(new FormData(e.target)); f.peak = !!f.peak;
+      btn.disabled = true; btn.textContent = 'Running…';
+      try { simResult = await api('api/sim/run', f); simVariant = 'early'; await viewSim(); } catch (err) { el.querySelector('.err').textContent = err.message; btn.disabled = false; btn.textContent = 'Run scenario'; }
+    };
+    el.onclick = async (e) => {
+      const vb = e.target.closest('[data-variant]'); if (vb) { simVariant = vb.dataset.variant; renderSim(); return; }
+      const row = e.target.closest('tr[data-run]'); if (row) { simResult = await api('api/sim/runs/' + row.dataset.run); simVariant = 'early'; renderSim(); $('#sim-out').scrollIntoView({ block: 'start' }); }
+    };
+  }
+
   // ---- routing -------------------------------------------------------------
-  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, money: viewMoney, setup: viewSetup };
+  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, risk: viewRisk, sim: viewSim, money: viewMoney, setup: viewSetup };
   function route(refreshOnly) {
     if (!ME) return;
     let h = location.hash.slice(1) || 'live', id = null;
     const m = /^issue-(\d+)$/.exec(h); if (m) { h = 'issue'; id = m[1]; }
     if (h !== 'issue' && !(h in VIEWS)) h = 'live';
     if ((h === 'money' || h === 'setup') && !can('manager')) h = 'live';
+    if ((h === 'risk' || h === 'sim') && !can('technician')) h = 'live';
+    clearInterval(replayTimer); replayTimer = null;
     if (refreshOnly === true && h === 'live') return;
     document.querySelectorAll('#app main').forEach((el) => { el.hidden = el.id !== 'v-' + h; });
     document.querySelectorAll('#tabs a').forEach((a) => { const on = a.getAttribute('href') === '#' + (h === 'issue' ? 'issues' : h); on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'); });

@@ -6,17 +6,18 @@
   --bg:#EDF0F3; --panel:#FFFFFF; --fg:#16202B; --muted:#55626E; --line:#C7CFD8;
   --accent:#1D5BB8; --accent-soft:#DCE8F8; --dough:#F3EAD0;
   --ok:#2B7A4B; --ok-soft:#DDF0E4; --warn:#A8690F; --warn-soft:#FBEBCB; --crit:#B93226; --crit-soft:#FADCD8;
+  --sim:#6B3FA0; --sim-soft:#EFE7F9;   /* simulated or projected data, never used for real records */
   --display:"Archivo","Arial Narrow",Arial,sans-serif;
   --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
 }
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
   --bg:#11171E; --panel:#19212B; --fg:#E5EAF0; --muted:#97A4B0; --line:#2F3B48;
   --accent:#74A9F5; --accent-soft:#1E3352; --dough:#3A3424;
-  --ok:#5CC389; --ok-soft:#17382A; --warn:#E0A84A; --warn-soft:#40300F; --crit:#F07A6E; --crit-soft:#4A1E1A; color-scheme:dark } }
+  --sim:#C4A3F2; --sim-soft:#2D2141; --ok:#5CC389; --ok-soft:#17382A; --warn:#E0A84A; --warn-soft:#40300F; --crit:#F07A6E; --crit-soft:#4A1E1A; color-scheme:dark } }
 :root[data-theme="dark"]{
   --bg:#11171E; --panel:#19212B; --fg:#E5EAF0; --muted:#97A4B0; --line:#2F3B48;
   --accent:#74A9F5; --accent-soft:#1E3352; --dough:#3A3424;
-  --ok:#5CC389; --ok-soft:#17382A; --warn:#E0A84A; --warn-soft:#40300F; --crit:#F07A6E; --crit-soft:#4A1E1A; color-scheme:dark }
+  --sim:#C4A3F2; --sim-soft:#2D2141; --ok:#5CC389; --ok-soft:#17382A; --warn:#E0A84A; --warn-soft:#40300F; --crit:#F07A6E; --crit-soft:#4A1E1A; color-scheme:dark }
 
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45}
@@ -128,6 +129,15 @@ input,select{background:var(--panel);border:1px solid var(--line);border-radius:
 .switch{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
 code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;overflow-wrap:anywhere}
 
+.panel.sim{border:2px dashed var(--sim);background:linear-gradient(var(--sim-soft),var(--sim-soft)) top/100% 5px no-repeat,var(--panel)}
+.simtag{font-family:var(--display);font-weight:700;font-size:.78rem;letter-spacing:.06em;color:var(--sim);border:1.5px solid var(--sim);background:var(--sim-soft);padding:2px 9px;border-radius:3px;white-space:nowrap}
+.three{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+.variant{display:flex;flex-direction:column;gap:4px;text-align:left;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:4px}
+.variant b{font-family:var(--display);font-size:1.5rem;font-variant-numeric:tabular-nums}
+.variant[aria-pressed="true"]{border:2px solid var(--sim);background:var(--sim-soft)}
+.hist{display:flex;align-items:flex-end;gap:2px;height:150px;border-bottom:1px solid var(--line)}
+.hist i{flex:1;background:var(--sim);border-radius:2px 2px 0 0;min-width:2px}
+.heat td.num{min-width:38px;text-align:center}
 .login{max-width:520px;margin:8vh auto 0;display:flex;flex-direction:column;gap:16px}
 .people{display:flex;flex-direction:column;gap:8px}
 .people button{display:flex;justify-content:space-between;gap:12px;text-align:left;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:6px;font-weight:500}
@@ -160,7 +170,7 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
     <div class="row"><button class="btn plain" id="mute" aria-pressed="false">Mute alarm</button><button class="btn plain" id="logout">Switch person</button></div>
   </header>
   <nav class="tabs" id="tabs" aria-label="Views">
-    <a href="#live">Live</a><a href="#issues">Issues</a><a href="#history">History</a><a href="#summary">Summary</a><a href="#money" data-role="manager">Losses</a><a href="#setup" data-role="manager">Setup</a>
+    <a href="#live">Live</a><a href="#issues">Issues</a><a href="#history">History</a><a href="#summary">Summary</a><a href="#risk" data-role="technician">Risk</a><a href="#sim" data-role="technician">Simulator</a><a href="#money" data-role="manager">Losses</a><a href="#setup" data-role="manager">Setup</a>
   </nav>
   <p class="note">Machine signals are simulated and run on a demo clock: one second here counts as one minute of production. Camera analysis runs on real footage of the machine.</p>
 
@@ -220,6 +230,8 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
   <main class="col" id="v-issue" hidden></main>
   <main class="col" id="v-history" hidden></main>
   <main class="col" id="v-summary" hidden></main>
+  <main class="col" id="v-risk" hidden></main>
+  <main class="col" id="v-sim" hidden></main>
   <main class="col" id="v-money" hidden></main>
   <main class="col" id="v-setup" hidden></main>
 </div>
