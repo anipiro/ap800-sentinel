@@ -11,6 +11,8 @@ const KINDS = {
   config_change:      { sev: 'medium', title: 'A safety setting was changed' },
   repeated_overrides: { sev: 'high',   title: 'Repeated overrides on this machine' },
   data_gap:           { sev: 'medium', title: 'Gap in machine data' },
+  model_drift:        { sev: 'medium', title: 'Detection model is drifting' },
+  model_drift:        { sev: 'medium', title: 'Detection model is drifting' },
 };
 const LOWER = { critical: 'high', high: 'medium', medium: 'low', low: 'low' };
 const SCHEDULE = { from: 6, to: 22 };   // placeholder production hours
@@ -170,4 +172,4 @@ function list(db, limit = 30) {
   return db.prepare('SELECT * FROM unusual_flags ORDER BY id DESC LIMIT ?').all(limit).map((f) => ({ ...f, data: f.data ? JSON.parse(f.data) : null }));
 }
 
-module.exports = { suspectKeys, SENSOR_KINDS, applyQuirk, everyTick, maskImplausible, check, raise, configChanged, verdict, markAlertRead, list, KINDS, QUIRKS, LIMITS, MAX_RATE };
+module.exports = { alertPeople, suspectKeys, SENSOR_KINDS, applyQuirk, everyTick, maskImplausible, check, raise, configChanged, verdict, markAlertRead, list, KINDS, QUIRKS, LIMITS, MAX_RATE };

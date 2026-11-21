@@ -273,7 +273,8 @@
           <div><dt>Time to failure at detection</dt><dd>${i.rul_min === null ? 'n/a' : Math.round(i.rul_min) + ' min'}</dd></div>
           <div><dt>Downtime</dt><dd>${(i.downtime_h * 60).toFixed(0)} min</dd></div><div><dt>Actual loss</dt><dd>${money(i.actual_loss)}</dd></div>
           <div><dt>Projected loss if not fixed</dt><dd>${money(i.projected_loss)}</dd></div><div><dt>Saved by early detection</dt><dd>${money(i.savings)}</dd></div></dl>
-        ${i.status === 'resolved' && can('manager') ? `<div class="row"><button class="btn go" id="verify">Verify the repair</button></div>` : ''}<p class="err"></p></section>
+        ${i.status === 'resolved' && can('manager') ? `<div class="row"><button class="btn go" id="verify">Verify the repair</button></div>` : ''}
+        <div class="row"><span class="small muted">Was the model right? ${i.feedback ? `Marked as ${i.feedback.verdict === 'real' ? 'a real fault' : 'a false alarm'} by ${esc(i.feedback.by_name)}.` : 'No feedback yet.'}</span>${can('technician') ? `<button class="btn plain" data-fb="real">Real fault</button><button class="btn plain" data-fb="false_alarm">False alarm</button>` : ''}</div><p class="err"></p></section>
       <div class="half"><section class="panel"><h2>What was detected and why</h2><p>${esc(ex.summary)}</p>
           <ul class="list">${(ex.contributions || []).map((c) => `<li>${esc(c.text)}</li>`).join('')}</ul>
           ${ex.original ? `<p><b>If the sensor is correct:</b> ${esc(ex.original.title)} (${esc(ex.original.label)}, ${Math.round(ex.original.confidence * 100)} % model confidence). The ${esc(ex.sensor.label.toLowerCase())} sensor ${esc(ex.sensor.why)}, so no machine action was recommended.</p>` : ''}
@@ -293,6 +294,7 @@
     keys.forEach((k) => drawSeries($('#ic-' + k), i.readings.map((r) => r.v[k]), flags, BASE[k], col));
     mountReplay($('#iss-replay'), { points: i.readings.map((r) => ({ m: (r.ts - i.detected_at) / 1000, v: r.v, a: r.a })), events: i.events.map((e) => ({ m: (e.ts - i.detected_at) / 1000, summary: e.summary })) }, false);
     const vb = $('#verify'); if (vb) vb.onclick = () => act(vb, `api/issues/${i.id}/verify`);
+    el.querySelectorAll('[data-fb]').forEach((b) => { b.onclick = () => act(b, `api/issues/${i.id}/feedback`, { verdict: b.dataset.fb }); });
   }
 
   let histQuery = '';
@@ -348,7 +350,7 @@
   }
 
   async function viewSetup() {
-    const s = await api('api/settings'), m = MODEL.metrics, A = await api('api/assumptions');
+    const s = await api('api/settings'), m = MODEL.metrics, A = await api('api/assumptions'), mh = await api('api/model-health');
     const sw = [['automation_enabled', 'Automation', 'When off, nothing runs by itself. Every action waits for a person.'], ['approval_stop_feed', 'Stopping the feed needs manager approval', ''], ['approval_safe_shutdown', 'Shutting the machine down needs manager approval', '']];
     $('#v-setup').innerHTML = `<div class="half"><section class="panel"><h2>Automation and safety</h2>
           ${sw.map(([k, l, h]) => `<div class="switch"><span><b>${l}</b>${h ? `<br><span class="small muted">${h}</span>` : ''}</span><button class="btn" data-key="${k}" data-on="${s.settings[k] ? 1 : 0}" aria-pressed="${s.settings[k]}">${s.settings[k] ? 'On' : 'Off'}</button></div>`).join('')}
@@ -361,9 +363,16 @@
         <form id="af"><div class="form"><label>Share of events caught early (0 to 1)<input id="as-catch" name="early_catch" type="number" step="0.01" min="0" max="1" value="${A.early_catch}"></label><label>Days since the gearbox bearing was changed<input id="as-age" name="bearing_age_days" type="number" min="0" value="${A.bearing_age_days}"></label></div>
           ${table(['Problem', 'Events per 30 operating days', 'Minutes from detection to breakdown if nobody acts'], Object.keys(A.rates_30d).map((k) => `<tr><td>${esc(FAULTS[k] || k)}</td><td><input id="as-rate-${k}" name="rate:${k}" type="number" step="any" min="0" value="${A.rates_30d[k]}" aria-label="Events per 30 days, ${esc(FAULTS[k] || k)}" size="6"></td><td>${A.ttf_min[k] !== undefined ? `<input id="as-ttf-${k}" name="ttf:${k}" type="number" min="1" value="${A.ttf_min[k]}" aria-label="Minutes to breakdown, ${esc(FAULTS[k] || k)}" size="6">` : '<span class="muted">no breakdown assumed</span>'}</td></tr>`))}
           <div class="row" style="margin-top:10px"><button class="btn go">Save assumptions</button></div></form><p class="err"></p></section>
+      <section class="panel"><div class="head"><h2>Model health</h2><span class="sev ${mh.status === 'ok' ? 'ok' : mh.status === 'drifting' ? 'critical' : 'none'}">${{ ok: 'healthy', drifting: 'drifting', collecting: 'collecting data' }[mh.status]}</span></div>
+        <dl class="kv"><div><dt>Model version</dt><dd>${mh.version}</dd></div><div><dt>Data drift score</dt><dd>${mh.drift === null ? 'n/a' : mh.drift.toFixed(2)} <small class="muted">limit ${mh.drift_threshold}</small></dd></div><div><dt>Furthest signal</dt><dd style="font-size:.9rem">${esc(mh.drift_signal || 'n/a')}</dd></div><div><dt>Average confidence, last 20 issues</dt><dd>${mh.avg_confidence === null ? 'n/a' : Math.round(mh.avg_confidence * 100) + ' %'}</dd></div><div><dt>False alarms reported, 7 days</dt><dd>${mh.false_alarms_7d} of ${mh.issues_7d} issues</dd></div><div><dt>Issues without a model version</dt><dd>${mh.issues_without_model_version}</dd></div></dl>
+        <div class="chart"><span class="lab">Drift score over the last ${mh.windows} checks (one check per 30 seconds of clean running)</span><canvas id="mh-trend"></canvas></div>
+        <form class="switch" id="df"><label for="df-value" style="flex:1"><b>Alert the manager when drift passes</b><br><span class="small muted">Drift is the largest shift of any signal's average from its training value, in standard deviations. A healthy line stays under 1.</span></label><span class="row"><input id="df-value" type="number" min="0.5" max="20" step="0.5" value="${mh.drift_threshold}" style="width:5.5em"><button class="btn">Save</button></span></form>
+        <p class="note">Every issue records the model version that raised it. Technicians mark issues as real or false alarm on the issue page.</p><p class="err"></p></section>
       <section class="panel"><h2>Detection model</h2><dl class="kv"><div><dt>Version</dt><dd>${MODEL.version}</dd></div><div><dt>Trained</dt><dd style="font-size:.9rem">${stamp(Date.parse(MODEL.trained_at))}</dd></div><div><dt>Precision</dt><dd>${(m.precision * 100).toFixed(1)} %</dd></div><div><dt>Recall</dt><dd>${(m.recall * 100).toFixed(1)} %</dd></div><div><dt>False-positive rate</dt><dd>${(m.false_positive_rate * 100).toFixed(2)} %</dd></div><div><dt>Fault type named correctly</dt><dd>${(m.type_accuracy * 100).toFixed(1)} %</dd></div></dl>
         <p class="note">Isolation Forest plus a deviation check, then a nearest-pattern classifier. Measured on ${m.test_samples} synthetic test samples from the simulator, not on a real machine. Forest alone: recall ${(m.forest_only.recall * 100).toFixed(1)} %. Retrain with <code>npm run train</code>.</p></section>
       <section class="panel"><h2>Audit log</h2>${table(['Time', 'Person', 'Action', 'Detail'], s.audit.map((a) => `<tr><td>${stamp(a.ts)}</td><td>${esc(a.name || '')}</td><td>${a.action.replace(/_/g, ' ')}</td><td class="small">${esc(a.detail || '')}</td></tr>`))}</section>`;
+    if (mh.trend.length) drawSeries($('#mh-trend'), mh.trend, mh.trend.map((d) => (d > mh.drift_threshold ? 1 : 0)), null, colours(), Math.max(mh.trend.length, 10));
+    $('#df').onsubmit = (e) => { e.preventDefault(); act(e.target.querySelector('button'), 'api/model/drift-limit', { value: Number($('#df-value').value) }); };
     $('#tf').onsubmit = (e) => { e.preventDefault(); act(e.target.querySelector('button'), 'api/threshold', { value: Number($('#th-value').value) / 100 }); };
     $('#af').onsubmit = (e) => { e.preventDefault(); const body = { rates_30d: {}, ttf_min: {} }; for (const [k, v] of new FormData(e.target)) { const [g, key] = k.split(':'); if (g === 'rate') body.rates_30d[key] = v; else if (g === 'ttf') body.ttf_min[key] = v; else body[k] = v; } act(e.target.querySelector('button'), 'api/assumptions', body); };
     $('#v-setup').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) act(b, 'api/settings', { key: b.dataset.key, value: b.dataset.on !== '1' }); };

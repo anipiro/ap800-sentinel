@@ -15,6 +15,7 @@ const kpi = require('./src/kpi');
 const kb = require('./src/kb');
 const parts = require('./src/parts');
 const audit = require('./src/audit');
+const monitor = require('./src/monitor');
 const risk = require('./src/risk');
 const { runScenario, crossCheckComparison } = require('./src/sandbox');
 
@@ -78,7 +79,7 @@ async function api(req, res, url) {
   if (p === '/api/kb' && GET) return send(res, 200, kb.search(db, q.q || ''));
 
   if (p === '/api/issues' && GET) return send(res, 200, reports.issues(db));
-  if ((m = /^\/api\/issues\/(\d+)$/.exec(p)) && GET) { const d = reports.issueDetail(db, Number(m[1])); if (d) { d.similar = kb.similar(db, { type: d.type, title: d.title, excludeIssue: d.id }); d.kb = db.prepare('SELECT * FROM kb_entries WHERE issue_id = ?').get(d.id) || null; } return d ? send(res, 200, d) : send(res, 404, { error: 'No such issue' }); }
+  if ((m = /^\/api\/issues\/(\d+)$/.exec(p)) && GET) { const d = reports.issueDetail(db, Number(m[1])); if (d) { d.similar = kb.similar(db, { type: d.type, title: d.title, excludeIssue: d.id }); d.kb = db.prepare('SELECT * FROM kb_entries WHERE issue_id = ?').get(d.id) || null; d.feedback = db.prepare('SELECT verdict, by_name, ts FROM issue_feedback WHERE issue_id = ? ORDER BY id DESC LIMIT 1').get(d.id) || null; } return d ? send(res, 200, d) : send(res, 404, { error: 'No such issue' }); }
   if ((m = /^\/api\/issues\/(\d+)\/(ack|resolve|verify)$/.exec(p)) && POST) {
     const body = await readBody(req), id = Number(m[1]);
     if (m[2] === 'ack') engine.ack(id, user); else if (m[2] === 'resolve') { engine.resolve(id, user, { note: String(body.note || '').slice(0, 300) }); kb.record(db, { issueId: id, rootCause: body.root_cause, fix: body.note, parts: body.parts, minutes: body.minutes, by: user.name }); } else engine.verify(id, user);
@@ -99,6 +100,9 @@ async function api(req, res, url) {
   if (p === '/api/summary' && GET) return send(res, 200, reports.summary(db, engine.state(engine.seq).machine.health));
   if (p === '/api/issues.csv' && GET) return csv(res, 'ap800-issues.csv', reports.issues(db, { limit: 2000 }).map((i) => ({ ...i, detected_at: new Date(i.detected_at).toISOString(), acked_at: i.acked_at && new Date(i.acked_at).toISOString(), resolved_at: i.resolved_at && new Date(i.resolved_at).toISOString() })));
 
+  if (p === '/api/model-health' && GET) { engine.need(user, 'technician'); return send(res, 200, monitor.health(db, model, versionId)); }
+  if (p === '/api/model/drift-limit' && POST) { const body = await readBody(req); monitor.setDriftThreshold(engine, body.value, user); return send(res, 200, { ok: true }); }
+  if ((m = /^\/api\/issues\/(\d+)\/feedback$/.exec(p)) && POST) { const body = await readBody(req); monitor.feedback(engine, Number(m[1]), String(body.verdict), user); return send(res, 200, { ok: true }); }
   if (p === '/api/audit' && GET) { engine.need(user, 'manager'); return send(res, 200, { entries: audit.entries(db, q), counts: audit.counts(db), categories: audit.CATEGORIES }); }
   if (p === '/api/audit.csv' && GET) { engine.need(user, 'manager'); return csv(res, 'ap800-audit.csv', audit.entries(db, { ...q, limit: 5000 }).map((r) => ({ time: new Date(r.ts).toISOString(), category: r.category_label, who: r.who, what: r.what, issue: r.issue_id || '' }))); }
   if (p === '/api/finance' && GET) { engine.need(user, 'manager'); return send(res, 200, reports.finance(db)); }

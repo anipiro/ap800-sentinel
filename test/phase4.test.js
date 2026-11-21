@@ -40,3 +40,46 @@ test('audit log gathers sign-ins, setting changes, approvals, rejections, overri
   assert.equal(audit.entries(db, { from: eng.now() + 1 }).length, 0);
   assert.ok(all.find((r) => r.category === 'rejection').issue_id > 0);
 });
+
+// ---- 2. model monitoring ----------------------------------------------------------
+const monitor = require('../src/monitor');
+test('model monitoring: clean running gives a low drift score and no alert', () => {
+  const { db, eng, notifier, run } = rig();
+  run(200);
+  const stats = db.prepare('SELECT * FROM model_stats ORDER BY id').all();
+  assert.ok(stats.length >= 3); for (const s of stats) { assert.ok(s.drift < 1.5, `drift ${s.drift}`); assert.equal(s.model_version_id, 1); assert.equal(s.samples, 60); }
+  const h = monitor.health(db, model, 1, eng.now());
+  assert.equal(h.status, 'ok'); assert.equal(h.version, 1); assert.equal(h.trend.length, stats.length); assert.equal(h.issues_without_model_version, 0);
+  assert.ok(!unusual.list(db).some((f) => f.kind === 'model_drift')); assert.equal(notifier.sent.length, 0);
+});
+test('model monitoring: a shifted input distribution raises the drift score and alerts the manager', () => {
+  const shifted = JSON.parse(JSON.stringify(model));
+  shifted.base.thick.mean += 3 * shifted.base.thick.sd;          // the line now runs a different thickness than the model learned
+  const { db, eng, notifier, run } = rig({ model: shifted });
+  run(140);
+  const h = monitor.health(db, shifted, 1, eng.now());
+  assert.equal(h.status, 'drifting'); assert.ok(h.drift > 2); assert.equal(h.drift_signal, 'Sheet thickness');
+  const flag = unusual.list(db).find((f) => f.kind === 'model_drift');
+  assert.ok(flag); assert.match(flag.explanation, /sheet thickness has moved .* standard deviations/);
+  assert.ok(notifier.sent.some((m) => m.user.name.startsWith('Mariam') && /model drift/.test(m.text)));
+  assert.equal(eng.state(0, U.mgr).flagAlerts.length, 1);
+  run(200); assert.equal(unusual.list(db).filter((f) => f.kind === 'model_drift').length, 1, 'one alert, not one per check');
+});
+test('model monitoring: every issue carries its model version; feedback is counted; limit is manager-only', () => {
+  const { db, eng, run } = rig();
+  run(30); eng.injectFault('jam', U.op); run(20);
+  const id = eng.active.id;
+  assert.equal(db.prepare('SELECT model_version_id FROM issues WHERE id = ?').get(id).model_version_id, 1);
+  assert.throws(() => monitor.feedback(eng, id, 'false_alarm', U.op), /technician/);
+  assert.throws(() => monitor.feedback(eng, id, 'maybe', U.tech), /real/);
+  monitor.feedback(eng, id, 'false_alarm', U.tech);
+  let h = monitor.health(db, model, 1, eng.now());
+  assert.equal(h.false_alarms_7d, 1); assert.equal(h.issues_7d, 1); assert.ok(h.avg_confidence > 0.5);
+  monitor.feedback(eng, id, 'real', U.tech);                    // changed their mind: the latest verdict counts
+  h = monitor.health(db, model, 1, eng.now());
+  assert.equal(h.false_alarms_7d, 0); assert.equal(h.confirmed_7d, 1);
+  assert.throws(() => monitor.setDriftThreshold(eng, 3, U.tech), /manager/);
+  monitor.setDriftThreshold(eng, 3, U.mgr);
+  assert.equal(monitor.health(db, model, 1, eng.now()).drift_threshold, 3);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_log WHERE action = 'set_drift_threshold'").get().n, 1);
+});
