@@ -19,6 +19,7 @@ const monitor = require('./src/monitor');
 const reportgen = require('./src/reportgen');
 const asker = require('./src/ask');
 const extapi = require('./src/extapi');
+const chain = require('./src/chain');
 const risk = require('./src/risk');
 const { runScenario, crossCheckComparison } = require('./src/sandbox');
 
@@ -79,9 +80,9 @@ async function api(req, res, url) {
   }
 
   if (!user) return send(res, 401, { error: 'Sign in first' });
-  if (p === '/api/me') return send(res, 200, { user, signals: SIG, faults: Object.fromEntries(Object.entries(FAULTS).filter(([, f]) => !f.untrained).map(([k, f]) => [k, f.name])), scenarios: Object.entries(FAULTS).map(([k, f]) => ({ key: k, name: f.name, trained: !f.untrained })), model: { version: versionId, trained_at: model.trainedAt, metrics: model.metrics }, baseline: model.base, alertZ: 6, timeScale: engine.timeScale });
+  if (p === '/api/me') return send(res, 200, { user, signals: SIG, sources: chain.SOURCES, faults: Object.fromEntries(Object.entries(FAULTS).filter(([, f]) => !f.untrained).map(([k, f]) => [k, f.name])), scenarios: Object.entries(FAULTS).map(([k, f]) => ({ key: k, name: f.name, trained: !f.untrained })), model: { version: versionId, trained_at: model.trainedAt, metrics: model.metrics }, baseline: model.base, alertZ: 6, timeScale: engine.timeScale });
   if (p === '/api/logout' && POST) { const c = /sid=([a-f0-9]+)/.exec(req.headers.cookie || ''); if (c) sessions.delete(c[1]); return send(res, 200, {}, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' }); }
-  if (p === '/api/state' && GET) { const st = engine.state(Number(q.since) || 0, user); return send(res, 200, { ...st, similar: st.active ? kb.similar(db, { type: st.active.type, title: st.active.title, excludeIssue: st.active.id }) : [], parts: st.active ? parts.forIssueType(db, st.active.type) : [], phone: { hist: phone.hist, live: Date.now() - phone.last < 5000 } }); }
+  if (p === '/api/state' && GET) { const st = engine.state(Number(q.since) || 0, user); return send(res, 200, { ...st, similar: st.active ? kb.similar(db, { type: st.active.type, title: st.active.title, excludeIssue: st.active.id }) : [], parts: st.active ? parts.forIssueType(db, st.active.type) : [], chain: chain.view(engine), phone: { hist: phone.hist, live: Date.now() - phone.last < 5000 } }); }
   if (p === '/api/parts' && GET) return send(res, 200, parts.list(db));
   if (p === '/api/handover' && GET) return send(res, 200, parts.handover(db));
   if (p === '/api/ask' && GET) { const m0 = engine.state(engine.seq).machine; return send(res, 200, asker.ask(db, q.q || '', { model, status: { status: m0.status, health: m0.health }, canMoney: user.role === 'manager', timeScale: engine.timeScale, target: engine.machine.target_kg_h, assumptions: engine.assumptions() })); }
@@ -120,7 +121,7 @@ async function api(req, res, url) {
   if (p === '/api/audit' && GET) { engine.need(user, 'manager'); return send(res, 200, { entries: audit.entries(db, q), counts: audit.counts(db), categories: audit.CATEGORIES }); }
   if (p === '/api/audit.csv' && GET) { engine.need(user, 'manager'); return csv(res, 'ap800-audit.csv', audit.entries(db, { ...q, limit: 5000 }).map((r) => ({ time: new Date(r.ts).toISOString(), category: r.category_label, who: r.who, what: r.what, issue: r.issue_id || '' }))); }
   if (p === '/api/finance' && GET) { engine.need(user, 'manager'); return send(res, 200, reports.finance(db)); }
-  if (p === '/api/settings' && GET) { engine.need(user, 'manager'); return send(res, 200, { settings: Object.fromEntries(db.prepare("SELECT key, value FROM settings WHERE value IN ('0', '1')").all().map((r) => [r.key, r.value === '1'])), unknownThreshold: Number(engine.setting('unknown_threshold')), costs: engine.costs(),
+  if (p === '/api/settings' && GET) { engine.need(user, 'manager'); return send(res, 200, { settings: Object.fromEntries(db.prepare("SELECT key, value FROM settings WHERE value IN ('0', '1')").all().map((r) => [r.key, r.value === '1'])), unknownThreshold: Number(engine.setting('unknown_threshold')), freezerEntryMax: chain.entryLimit(db), costs: engine.costs(),
     chain: db.prepare('SELECT r.level, u.name, u.role, u.shift FROM responsibilities r JOIN users u ON u.id = r.user_id ORDER BY r.level, u.id').all(), escalateAfterS: engine.escalateAfterS,
     audit: db.prepare('SELECT a.ts, u.name, a.action, a.detail FROM audit_log a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 40').all() }); }
   if (p === '/api/settings' && POST) { const body = await readBody(req); engine.setSetting(String(body.key), !!body.value, user); return send(res, 200, { ok: true }); }
@@ -151,6 +152,8 @@ async function api(req, res, url) {
   if (p === '/api/assumptions' && GET) { engine.need(user, 'technician'); return send(res, 200, engine.assumptions()); }
   if (p === '/api/assumptions' && POST) return send(res, 200, engine.setAssumptions(await readBody(req), user));
   if ((m = /^\/api\/flag-alerts\/(\d+)\/read$/.exec(p)) && POST) { unusual.markAlertRead(engine, Number(m[1]), user); return send(res, 200, { ok: true }); }
+  if (p === '/api/demo/warm' && POST) { const body = await readBody(req); chain.setWarm(engine, !!body.on, user); return send(res, 200, { ok: true }); }
+  if (p === '/api/freezer-limit' && POST) { const body = await readBody(req); chain.setEntryLimit(engine, body.value, user); return send(res, 200, { ok: true }); }
   if (p === '/api/demo/quirk' && POST) { const body = await readBody(req); engine.setQuirk(body.quirk || null, user); return send(res, 200, { ok: true }); }
 
   return send(res, 404, { error: 'Not found' });

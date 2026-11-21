@@ -155,6 +155,12 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
 .qr{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
 .qr .code{background:#fff;padding:6px;border-radius:4px;line-height:0}
 .qr .code svg{width:150px;height:150px;display:block}
+.chain{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (max-width:700px){.chain{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.stage{border:1px solid var(--line);border-top:5px solid var(--ok);border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.stage.warning{border-top-color:var(--warn);background:var(--warn-soft)} .stage.fault,.stage.stopped{border-top-color:var(--crit);background:var(--crit-soft)} .stage.waiting{border-top-color:var(--line)}
+.stage b{font-family:var(--display)} .stage .src{font-size:.72rem;color:var(--muted)}
+.chart .src{font-size:.68rem;color:var(--muted);overflow-wrap:anywhere}
 .login{max-width:520px;margin:8vh auto 0;display:flex;flex-direction:column;gap:16px}
 .people{display:flex;flex-direction:column;gap:8px}
 .people button{display:flex;justify-content:space-between;gap:12px;text-align:left;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:6px;font-weight:500}
@@ -195,6 +201,11 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
   <main class="grid" id="v-live">
     <div class="col">
       <section class="panel">
+        <div class="head"><h2>Line chain</h2><span class="small muted">Forming to packaging. Freezer, drive and thermal readings are simulated.</span></div>
+        <div class="chain" id="chain"></div>
+        <p class="small" id="chain-note"></p>
+      </section>
+      <section class="panel">
         <div class="head"><h2>Line view</h2><span class="small muted">Each station shows its live readings and health</span></div>
         <div class="linewrap" id="line"></div>
       </section>
@@ -204,7 +215,8 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
           <div class="charts" id="charts"></div>
         </section>
         <section class="panel">
-          <div class="head"><h2>Exit belt camera</h2><span class="small muted">Recorded footage, analysed live</span></div>
+          <div class="head"><h2>Exit belt camera</h2><button class="btn plain" id="thermal" aria-pressed="false">Thermal view</button></div>
+          <span class="small muted" id="cam-note">Recorded footage, analysed live</span>
           <div class="cam">
             <video id="vid" src="media/belt.mp4" muted loop autoplay playsinline></video>
             <canvas id="ov" width="640" height="360"></canvas>
@@ -213,6 +225,8 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
           <dl class="kv">
             <div><dt>Products in view</dt><dd id="v-count">0</dd></div>
             <div><dt>Flagged</dt><dd id="v-bad">0</dd></div>
+            <div><dt>Product temperature</dt><dd id="v-temp">n/a</dd></div>
+            <div><dt>At freezer entry</dt><dd id="v-entry">n/a</dd></div>
           </dl>
         </section>
       </div>
@@ -226,10 +240,15 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
         <div class="head"><h2>Your alerts</h2></div>
         <div id="inbox" class="acts"></div>
       </section>
+      <section class="panel">
+        <div class="head"><h2>Motor drive and blast freezer</h2><span class="small muted">Simulated</span></div>
+        <div class="charts" id="aux-charts"></div>
+      </section>
       <section class="panel demo">
         <div class="head"><h2>Test a fault</h2><span class="small muted">Demo control, shared by everyone</span></div>
         <p class="small muted">Play a fault into the simulated machine and watch the model find it.</p>
         <div class="row" id="faults"></div>
+        <div class="row"><button class="btn" id="warm" aria-pressed="false">Warm product reaches the freezer</button></div>
       </section>
       <section class="panel">
         <div class="head"><h2>Phone sensor</h2><span class="small" id="dev-state">Not connected</span></div>

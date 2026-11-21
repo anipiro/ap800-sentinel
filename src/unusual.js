@@ -12,7 +12,9 @@ const KINDS = {
   repeated_overrides: { sev: 'high',   title: 'Repeated overrides on this machine' },
   data_gap:           { sev: 'medium', title: 'Gap in machine data' },
   model_drift:        { sev: 'medium', title: 'Detection model is drifting' },
+  warm_product:       { sev: 'high',   title: 'Product entering the freezer too warm' },
   model_drift:        { sev: 'medium', title: 'Detection model is drifting' },
+  warm_product:       { sev: 'high',   title: 'Product entering the freezer too warm' },
 };
 const LOWER = { critical: 'high', high: 'medium', medium: 'low', low: 'low' };
 const SCHEDULE = { from: 6, to: 22 };   // placeholder production hours

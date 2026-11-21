@@ -4,7 +4,9 @@
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const HIST = 200;
-  let ME = null, SIG = {}, BASE = {}, ALERT_Z = 6, FAULTS = {}, SCENARIOS = [], MODEL = null;
+  let ME = null, SIG = {}, BASE = {}, ALERT_Z = 6, FAULTS = {}, SCENARIOS = [], MODEL = null, SOURCES = [], thermal = false;
+  const srcOf = (k) => (SOURCES.find((s) => s.key === k) || {}).source || '';
+  const AUX = [['vfd_amps', 1], ['vfd_torque', 0], ['vfd_speed', 0], ['winding', 1], ['entry', 1], ['chamber', 1], ['compressor', 1]];
   let seq = 0, state = null, muted = false, lastIssueId = null, activeSig = '';
   const ticks = [];   // { v, a }
 
@@ -110,7 +112,8 @@
     const last = data.length - 1; c.beginPath(); c.arc(x(last), y(data[last]), 2.6, 0, 7); c.fillStyle = flags && flags[last] ? col.crit : col.fg; c.fill();
   }
   function buildCharts() {
-    $('#charts').innerHTML = CHARTS.map((k) => `<div class="chart" id="ch-${k}"><span class="lab">${SIG[k].label}</span><span class="val"><span id="cv-${k}">0</span> <small>${SIG[k].unit}</small></span><canvas id="cc-${k}"></canvas></div>`).join('');
+    $('#charts').innerHTML = CHARTS.map((k) => `<div class="chart" id="ch-${k}"><span class="lab">${SIG[k].label}</span><span class="val"><span id="cv-${k}">0</span> <small>${SIG[k].unit}</small></span><canvas id="cc-${k}"></canvas><span class="src">${esc(srcOf(k))}</span></div>`).join('');
+    $('#aux-charts').innerHTML = AUX.map(([k]) => { const s = SOURCES.find((x) => x.key === k); return `<div class="chart" id="ax-${k}"><span class="lab">${esc(s.label)}</span><span class="val"><span id="av-${k}">0</span> <small>${esc(s.unit)}</small></span><canvas id="ac-${k}"></canvas><span class="src">${esc(s.source)}</span></div>`; }).join('') + `<div class="chart" id="ax-ptc"><span class="lab">Motor over-temperature trip</span><span class="val" id="av-ptc">OK</span><span class="src">${esc(srcOf('ptc_trip'))}</span></div>`;
   }
   function renderCharts(v) {
     const col = colours(), flags = ticks.map((t) => t.a);
@@ -124,6 +127,24 @@
     $('#dev-state').textContent = ph.live ? 'Connected' : ph.hist.length ? 'No recent readings' : 'Not connected';
     $('#dev-chart').hidden = !ph.hist.length; $('#dev-help').hidden = ph.live;
     if (ph.hist.length) { $('#dev-val').textContent = ph.hist[ph.hist.length - 1].toFixed(2); drawSeries($('#dev-cv'), ph.hist, null, null, col, 120); }
+  }
+
+  // ---- line chain, motor drive, freezer (simulated) -----------------------------
+  function renderChain() {
+    const c = state.chain; if (!c) return;
+    const word = { ok: 'OK', warning: 'Warning', fault: 'Fault', stopped: 'Stopped', waiting: 'Waiting' };
+    $('#chain').innerHTML = c.stages.map((s) => `<div class="stage ${s.status}"><b>${esc(s.name)}</b><span class="sev ${s.status === 'ok' ? 'ok' : s.status === 'warning' ? 'medium' : s.status === 'waiting' ? 'none' : 'critical'}" style="align-self:flex-start">${word[s.status]}</span><span class="small">${esc(s.detail)}</span><span class="src">${esc(s.source)}</span></div>`).join('');
+    $('#chain-note').textContent = c.problem_at ? `Problem at: ${c.problem_at}. ${c.freezer_risk || ''}` : 'No problem anywhere in the chain.';
+    const col = colours(), v = c.values;
+    AUX.forEach(([k, dp]) => {
+      const bad = (k === 'entry' && v.entry > c.entry_limit) || (k === 'winding' && v.ptc_trip) || (k === 'vfd_amps' && v.vfd_amps > c.normal.vfd_amps * 1.15) || (k === 'chamber' && v.chamber > -29);
+      $('#ax-' + k).className = 'chart' + (bad ? ' bad' : ''); $('#av-' + k).textContent = Number(v[k]).toFixed(dp);
+      drawSeries($('#ac-' + k), c.hist[k], bad ? c.hist[k].map(() => 1) : null, null, col, 160);
+    });
+    $('#ax-ptc').className = 'chart' + (v.ptc_trip ? ' bad' : ''); $('#av-ptc').textContent = v.ptc_trip ? 'TRIPPED' : 'OK';
+    $('#v-temp').textContent = v.product.toFixed(1) + ' °C'; $('#v-entry').textContent = v.entry.toFixed(1) + ' °C';
+    $('#v-entry').style.color = v.entry > c.entry_limit ? 'var(--crit)' : '';
+    $('#warm').setAttribute('aria-pressed', c.warm_demo);
   }
 
   // ---- active issue --------------------------------------------------------
@@ -142,7 +163,7 @@
       if (activeSig !== 'none') { activeSig = 'none'; box.innerHTML = `<p class="empty">${state.machine.stopped ? 'The machine is stopped. Undo the stop on the last issue to restart it.' : 'No active issue. When the model detects a problem it appears here with the reason, the people alerted and the actions taken.'}</p>`; }
       return;
     }
-    const sig = JSON.stringify([a.id, a.title, a.low, a.note, a.sensorNote, a.severity, a.acked, a.level, state.actions.map((x) => x.status + x.warn), state.similar.map((k) => k.id), state.parts.map((p) => p.stock), ME.role, state.machine.stopped]);
+    const sig = JSON.stringify([a.id, a.title, a.low, a.note, a.sensorNote, !!(state.chain && state.chain.support), a.severity, a.acked, a.level, state.actions.map((x) => x.status + x.warn), state.similar.map((k) => k.id), state.parts.map((p) => p.stock), ME.role, state.machine.stopped]);
     if (sig !== activeSig) {
       activeSig = sig;
       box.innerHTML = `<div class="issue ${a.severity}">
@@ -152,6 +173,7 @@
         ${a.candidate ? `<p class="small"><b>Most likely, low confidence:</b> ${esc(a.candidate.title)} (${Math.round(a.candidate.confidence * 100)} %). No machine action is recommended; inspect the machine first.</p>` : ''}
         ${a.note ? `<p class="warnline">${esc(a.note)}</p>` : ''}
         ${a.sensorNote ? `<p class="small"><b>Sensor note:</b> ${esc(a.sensorNote)}</p>` : ''}
+        ${state.chain && state.chain.support ? `<p class="small"><b>Supporting evidence:</b> ${esc(state.chain.support)}</p>` : ''}
         <p class="small">${esc(a.cause)}</p>
         <div><span class="small muted">Why the model flagged it</span><ul class="list" id="a-why"></ul></div>
         <div><span class="small muted">What to check</span><ul class="list">${a.check.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></div>
@@ -179,6 +201,9 @@
     $('#inbox').innerHTML = state.flagAlerts.map((n) => `<div class="act"><span style="flex:1 1 200px"><b>Unusual activity: ${esc(n.title)}</b><br><span class="muted">${esc(n.explanation)}<br>Sent to you ${clock(n.sent_at)}</span></span><span class="row"><a class="btn plain" href="#risk">Open Risk</a><button class="btn go" data-alert="${n.id}">Mark as read</button></span></div>`).join('') + state.inbox.map((n) => `<div class="act"><span><b>${esc(n.title)}</b><br><span class="muted">Sent to you ${clock(n.sent_at)}, escalation level ${n.level}</span></span><button class="btn go" data-id="${n.issue_id}">Acknowledge</button></div>`).join('');
   }
   $('#inbox').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; if (b.dataset.alert) act(b, `api/flag-alerts/${b.dataset.alert}/read`); else act(b, `api/issues/${b.dataset.id}/ack`); });
+
+  $('#thermal').addEventListener('click', (e) => { thermal = !thermal; e.target.setAttribute('aria-pressed', thermal); $('#cam-note').textContent = thermal ? 'Simulated infrared heat map on recorded footage. Source: IR camera — Ethernet' : 'Recorded footage, analysed live'; });
+  $('#warm').addEventListener('click', (e) => act(e.target, 'api/demo/warm', { on: e.target.getAttribute('aria-pressed') !== 'true' }));
 
   // ---- fault injector ------------------------------------------------------
   function buildFaults() {
@@ -223,7 +248,15 @@
     if (frozen && !v.paused) v.pause(); if (!frozen && v.paused) v.play().catch(() => {});
     $('#veil').hidden = !(frozen || starved); $('#veil').textContent = frozen ? 'Belt stopped' : 'Simulated: no product reaching the belt';
     const pBad = state.active && v2 ? Math.min(0.9, v2.defect / 100) : 0; let bad = 0;
-    if (!starved) boxes.forEach((b) => { const isBad = Math.random() < pBad; if (isBad) bad++; c.lineWidth = isBad ? 3 : 1.5; c.strokeStyle = isBad ? '#ff5a4d' : '#59e08c'; c.strokeRect(b.x * k - 2, b.y * k - 2, b.w * k + 4, b.h * k + 4); });
+    const ch = state.chain;
+    if (thermal && ch) {
+      // simulated infrared: cold background, each product coloured by its temperature (blue 8 °C, yellow 18 °C, red 28 °C)
+      c.fillStyle = 'rgba(8,16,60,0.78)'; c.fillRect(0, 0, cv.width, cv.height);
+      const heat = (t) => { const x = Math.max(0, Math.min(1, (t - 8) / 20)); return `hsl(${Math.round(240 - 240 * x)} 95% ${Math.round(45 + 15 * x)}%)`; };
+      if (!starved) boxes.forEach((b, i) => { const t = ch.values.product + ((i * 37) % 9 - 4) * 0.25; c.fillStyle = heat(t); c.beginPath(); c.ellipse((b.x + b.w / 2) * k, (b.y + b.h / 2) * k, (b.w * k) / 2 + 3, (b.h * k) / 2 + 3, 0, 0, 7); c.fill(); });
+      for (let i = 0; i <= 20; i++) { c.fillStyle = heat(8 + i); c.fillRect(cv.width - 26, 20 + (20 - i) * 8, 12, 8); }
+      c.fillStyle = '#fff'; c.font = '13px sans-serif'; c.fillText('28 °C', cv.width - 62, 28); c.fillText('8 °C', cv.width - 56, 190); c.font = 'bold 15px sans-serif'; c.fillText(`SIMULATED INFRARED   product ${ch.values.product.toFixed(1)} °C`, 12, 24);
+    } else if (!starved) boxes.forEach((b) => { const isBad = Math.random() < pBad; if (isBad) bad++; c.lineWidth = isBad ? 3 : 1.5; c.strokeStyle = isBad ? '#ff5a4d' : '#59e08c'; c.strokeRect(b.x * k - 2, b.y * k - 2, b.w * k + 4, b.h * k + 4); });
     $('#v-count').textContent = starved ? 0 : boxes.length; $('#v-bad').textContent = bad;
   }
 
@@ -239,7 +272,7 @@
     $('#s-health').textContent = m.health; $('#s-rate').textContent = Math.round(v.rate); $('#s-def').textContent = v.defect.toFixed(1);
     if (s.active && s.active.id !== lastIssueId) { lastIssueId = s.active.id; beep(); }
     if (!$('#v-live').hidden) {
-      renderLine(v); renderCharts(v); renderActive(); renderInbox();
+      renderLine(v); renderCharts(v); renderActive(); renderInbox(); renderChain();
       document.querySelectorAll('#faults [data-fault]').forEach((b) => b.setAttribute('aria-pressed', !!m.fault && b.dataset.fault === m.fault));
     }
   }
@@ -280,6 +313,7 @@
           ${ex.original ? `<p><b>If the sensor is correct:</b> ${esc(ex.original.title)} (${esc(ex.original.label)}, ${Math.round(ex.original.confidence * 100)} % model confidence). The ${esc(ex.sensor.label.toLowerCase())} sensor ${esc(ex.sensor.why)}, so no machine action was recommended.</p>` : ''}
           ${ex.candidate ? `<p><b>Most likely, low confidence:</b> ${esc(ex.candidate.title)} (${esc(ex.candidate.label)}, ${Math.round(ex.candidate.confidence * 100)} %). No machine action was recommended.</p>` : ''}
           ${ex.sensor_note ? `<p><b>Sensor note:</b> ${esc(ex.sensor_note)}</p>` : ''}
+          ${ex.support ? `<p><b>Supporting evidence:</b> ${esc(ex.support)}</p>` : ''}
           ${ex.confidence_note ? `<p class="warnline">${esc(ex.confidence_note)}</p>` : ''}${ex.confirmed ? `<p class="small">${esc(ex.confirmed)}</p>` : ''}
           <p class="small muted">Anomaly score ${ex.score} against a threshold of ${ex.threshold}. Largest deviation ${ex.max_deviation} standard deviations. Pattern match with "${esc(i.label)}": ${Math.round((ex.type_similarity || 0) * 100)} %.</p>
           <p><b>Recommended:</b> ${esc(i.recommended)}</p>${i.resolution ? `<p><b>Resolution:</b> ${esc(i.resolution)} (${esc(i.resolved_by)})</p>` : ''}</section>
@@ -360,6 +394,7 @@
     $('#v-setup').innerHTML = `<div class="half"><section class="panel"><h2>Automation and safety</h2>
           ${sw.map(([k, l, h]) => `<div class="switch"><span><b>${l}</b>${h ? `<br><span class="small muted">${h}</span>` : ''}</span><button class="btn" data-key="${k}" data-on="${s.settings[k] ? 1 : 0}" aria-pressed="${s.settings[k]}">${s.settings[k] ? 'On' : 'Off'}</button></div>`).join('')}
           <form class="switch" id="tf"><label for="th-value" style="flex:1"><b>Name a fault only above this confidence</b><br><span class="small muted">Below it, the issue is shown as "Unclassified anomaly: inspect the machine" with the top candidate listed, and no machine action is recommended.</span></label><span class="row"><input id="th-value" name="pct" type="number" min="0" max="100" step="1" value="${Math.round(s.unknownThreshold * 100)}" style="width:5.5em"> %<button class="btn">Save</button></span></form>
+          <form class="switch" id="ff"><label for="ff-value" style="flex:1"><b>Warmest product allowed into the blast freezer</b><br><span class="small muted">Above this, a quality warning is raised and the technician is alerted.</span></label><span class="row"><input id="ff-value" type="number" min="0" max="40" step="0.5" value="${s.freezerEntryMax}" style="width:5.5em"> °C<button class="btn">Save</button></span></form>
           <p class="note">There is no control link to the AP800. Machine commands go to a mock that records them and stops the simulated machine.</p><p class="err"></p></section>
         <section class="panel"><h2>Who is called</h2>${table(['Level', 'Person', 'Role', 'Shift'], s.chain.map((r) => `<tr><td>${r.level}</td><td>${esc(r.name)}</td><td>${r.role}</td><td>${r.shift}</td></tr>`))}
           <p class="note">Level 1 is alerted first, by whoever is on shift (day is 08:00 to 20:00). If nobody acknowledges within ${s.escalateAfterS} s the next level is alerted. Telegram messages are recorded but not sent: no bot token is configured.</p></section></div>
@@ -373,6 +408,9 @@
         <div class="chart"><span class="lab">Drift score over the last ${mh.windows} checks (one check per 30 seconds of clean running)</span><canvas id="mh-trend"></canvas></div>
         <form class="switch" id="df"><label for="df-value" style="flex:1"><b>Alert the manager when drift passes</b><br><span class="small muted">Drift is the largest shift of any signal's average from its training value, in standard deviations. A healthy line stays under 1.</span></label><span class="row"><input id="df-value" type="number" min="0.5" max="20" step="0.5" value="${mh.drift_threshold}" style="width:5.5em"><button class="btn">Save</button></span></form>
         <p class="note">Every issue records the model version that raised it. Technicians mark issues as real or false alarm on the issue page.</p><p class="err"></p></section>
+      <section class="panel"><div class="head"><h2>Data sources</h2><span class="small muted">Where each reading would come from on the real line. All are simulated in this demo.</span></div>
+        ${table(['Reading', 'Unit', 'Signal type', 'Device', 'Connection', 'In this demo'], SOURCES.map((x) => `<tr><td>${esc(x.label)}</td><td>${esc(x.unit)}</td><td>${esc(x.type)}</td><td>${esc(x.device)}</td><td>${esc(x.protocol)}</td><td>simulated</td></tr>`))}
+        <p class="note">The belt camera analysis runs on real recorded footage; the infrared view and every other reading are simulated.</p></section>
       <section class="panel"><div class="head"><h2>Integrations</h2><span class="sev ${ig.api_enabled ? 'ok' : 'none'}">API ${ig.api_enabled ? 'on' : 'off'}</span></div>
         <p class="small">Read-only API for other systems: ${ig.endpoints.map((e) => `<code>${esc(e)}</code>`).join(' ')}. Send the token as <code>Authorization: Bearer &lt;token&gt;</code>. ${ig.api_enabled ? '' : 'It is off because no <code>API_TOKEN</code> environment variable was set when the server started.'}</p>
         <form class="switch" id="wf"><label for="wf-url" style="flex:1"><b>Post every new issue to this address</b><br><span class="small muted">Leave empty to switch the webhook off. Simulated issues are never posted.</span></label><span class="row"><input id="wf-url" type="url" placeholder="https://example.org/hook" value="${esc(ig.webhook_url)}" style="width:20em;max-width:100%"><button class="btn">Save</button></span></form>
@@ -383,6 +421,7 @@
     if (mh.trend.length) drawSeries($('#mh-trend'), mh.trend, mh.trend.map((d) => (d > mh.drift_threshold ? 1 : 0)), null, colours(), Math.max(mh.trend.length, 10));
     $('#wf').onsubmit = (e) => { e.preventDefault(); act(e.target.querySelector('button'), 'api/webhook', { url: $('#wf-url').value }); };
     $('#df').onsubmit = (e) => { e.preventDefault(); act(e.target.querySelector('button'), 'api/model/drift-limit', { value: Number($('#df-value').value) }); };
+    $('#ff').onsubmit = (e) => { e.preventDefault(); act(e.target.querySelector('button'), 'api/freezer-limit', { value: Number($('#ff-value').value) }); };
     $('#tf').onsubmit = (e) => { e.preventDefault(); act(e.target.querySelector('button'), 'api/threshold', { value: Number($('#th-value').value) / 100 }); };
     $('#af').onsubmit = (e) => { e.preventDefault(); const body = { rates_30d: {}, ttf_min: {} }; for (const [k, v] of new FormData(e.target)) { const [g, key] = k.split(':'); if (g === 'rate') body.rates_30d[key] = v; else if (g === 'ttf') body.ttf_min[key] = v; else body[k] = v; } act(e.target.querySelector('button'), 'api/assumptions', body); };
     $('#v-setup').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) act(b, 'api/settings', { key: b.dataset.key, value: b.dataset.on !== '1' }); };
@@ -644,7 +683,7 @@
 
   async function start() {
     let me; try { me = await api('api/me'); } catch (e) { return; }
-    ME = me.user; SIG = me.signals; BASE = me.baseline; ALERT_Z = me.alertZ; FAULTS = me.faults; SCENARIOS = me.scenarios; MODEL = me.model;
+    ME = me.user; SIG = me.signals; BASE = me.baseline; ALERT_Z = me.alertZ; FAULTS = me.faults; SCENARIOS = me.scenarios; MODEL = me.model; SOURCES = me.sources;
     $('#login').hidden = true; $('#app').hidden = false;
     $('#s-user').textContent = ME.name.replace(/ \(.*/, '') + ', ' + ME.role;
     document.querySelectorAll('#tabs a[data-role]').forEach((a) => { a.hidden = !can(a.dataset.role); });

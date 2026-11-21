@@ -6,6 +6,7 @@ const loss = require('./loss');
 const unusual = require('./unusual');
 const workorders = require('./workorders');
 const monitor = require('./monitor');
+const chain = require('./chain');
 
 const OPEN_AFTER = 6;      // consecutive anomalous ticks (3 s) before an issue is opened
 const CLEAR_AFTER = 20;    // consecutive normal ticks (10 s) before an issue clears by itself
@@ -52,6 +53,7 @@ class Sentinel {
     if (this.cooldown > 0) this.cooldown--;
     this.last = p;
     try { monitor.observe(this, p); } catch (e) { /* monitoring must never disturb detection */ }
+    try { chain.step(this); } catch (e) { /* the line-chain simulation must never disturb detection */ }
     (this.zHist = this.zHist || []).push(p.z); if (this.zHist.length > 6) this.zHist.shift();
     const v = {}; KEYS.forEach((k) => { v[k] = +this.ew[k].toFixed(SIG[k].dp + 1); });
     this.ring.push({ seq: ++this.seq, ts: this.now(), v, a: p.anomaly ? 1 : 0, s: p.score });
