@@ -1,5 +1,5 @@
 <title>AP800 Sentinel</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+Georgian:wght@400;500;600;700&display=swap">
 <style>
 /* Layout: operator screen. Status bar and tabs on top; each tab is one working view. Stacks to one column on a phone. */
 :root{
@@ -9,8 +9,8 @@
   --accent:#E60000; --accent-soft:#FFF4F2; --dough:#F3EAD0;
   --ok:#1B7A43; --ok-soft:#E3F3E9; --warn:#A86400; --warn-soft:#FFF0D2; --crit:#8A0F0F; --crit-soft:#F6D9D6;
   --sim:#6B3FA0; --sim-soft:#EFE7F9;   /* simulated or projected data, never used for real records */
-  --display:"Archivo","Arial Narrow",Arial,sans-serif;
-  --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+  --display:"Archivo","Noto Sans Georgian","Arial Narrow",Arial,sans-serif;
+  --body:"IBM Plex Sans","Noto Sans Georgian","Segoe UI",system-ui,sans-serif;
   color-scheme:light;
 }
 
@@ -177,6 +177,8 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
 .issue{background:var(--panel)}
 .me{max-width:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
 @media (max-width:820px){.me{grid-template-columns:minmax(0,1fr)}}
+.tabs a,.btn,.stage b,.variant span{overflow-wrap:anywhere}
+.btn{white-space:normal;text-align:center}
 .login{max-width:520px;margin:8vh auto 0;display:flex;flex-direction:column;gap:16px}
 .people{display:flex;flex-direction:column;gap:8px}
 .people button{display:flex;justify-content:space-between;gap:12px;text-align:left;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:6px;font-weight:500}
@@ -219,6 +221,7 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
   <div class="login">
     <div class="brand"><h1>AP800 Sentinel</h1><span class="muted">Fault detection for the Signal-Pack AP800 dumpling line</span></div>
     <p>Choose who you are. Each role sees and can do different things.</p>
+    <div data-i18n-skip><button class="btn" data-lang="en" hidden aria-label="Switch to English">ENG</button><button class="btn" data-lang="ka" hidden aria-label="ქართულზე გადართვა">ქართ</button></div>
     <div class="people" id="people"></div>
     <p class="note">Demo sign-in: no password. Machine signals are simulated; people, costs and the control link are placeholders.</p>
   </div>
@@ -237,7 +240,7 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
       <div><dt>Defects</dt><dd><span id="s-def">0.0</span> %</dd></div>
       <div><dt>Signed in</dt><dd id="s-user"></dd></div>
     </dl>
-    <div class="row"><button class="btn plain" id="mute" aria-pressed="false">Mute alarm</button><button class="btn plain" id="logout">Switch person</button></div>
+    <div class="row"><span data-i18n-skip><button class="btn plain" data-lang="en" hidden aria-label="Switch to English">ENG</button><button class="btn plain" data-lang="ka" hidden aria-label="ქართულზე გადართვა">ქართ</button></span><button class="btn plain" id="mute" aria-pressed="false">Mute alarm</button><button class="btn plain" id="logout">Switch person</button></div>
   </header>
   <nav class="tabs" id="tabs" aria-label="Views">
     <a href="#live">Live</a><a href="#me">My work</a><a href="#issues">Issues</a><a href="#work">Work orders</a><a href="#history">History</a><a href="#summary">Summary</a><a href="#ask">Ask</a><a href="#risk" data-role="technician">Risk</a><a href="#sim" data-role="technician">Simulator</a><a href="#money" data-role="manager">Losses</a><a href="#audit" data-role="manager">Audit</a><a href="#setup" data-role="manager">Setup</a>
@@ -323,5 +326,6 @@ code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;ove
   <main class="col" id="v-audit" hidden></main>
   <main class="col" id="v-setup" hidden></main>
 </div>
+<script src="i18n.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="app.js"></script>
