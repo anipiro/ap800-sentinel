@@ -34,6 +34,8 @@ The server and the tunnel were started from the Claude Code session. If that ses
 6. Issues tab: open the issue. Show lifecycle, explanation, replay. Press **Verify the repair**.
 7. Work orders tab: assign a work order; show the calendar window and spare parts.
 8. Summary tab: KPIs and shift handover. Losses tab: loss and savings.
+   - Live tab: point at the **Line chain** strip and the source label under each chart. Press **Thermal view** on the camera, then **Warm product reaches the freezer**: within 15 seconds the conveyor and freezer turn amber and the technician is alerted. Press both again to switch them off.
+   - Ask tab: press "What should we fix first?" and "Why did the last issue happen?".
 9. Risk tab: projection and heatmap. Press **Temperature sensor reads 180 °C** to show unusual activity (flag appears in 2 seconds), then **Switch tests off**.
 10. Simulator tab: run **Pressure sensor drops out**; show the before/after table.
 11. Optional: sign in as **Nino (operator)** in another browser to show that Losses, Setup, Approve and Resolve are not available.
@@ -58,7 +60,7 @@ cd C:\Users\User\projects\ap800-sentinel
 npm start
 ```
 
-This deletes all issues, history, work orders, knowledge-base entries and stored simulations, and restores default settings, costs, stock and assumptions.
+This deletes all issues, history, work orders, knowledge-base entries and stored simulations, and restores default settings, costs, stock and assumptions. The production value goes back to the default 3,000 GEL per hour: set it to 3,600 again on the Losses tab (Cost settings) after a reset.
 
 ## Restart the tunnel (gives a NEW public address)
 
@@ -88,7 +90,7 @@ That is the new public address. The old one stops working. Share the new one and
 
 ## Backup screenshots
 
-`C:\Users\User\projects\ap800-sentinel\demo-backup` holds 16 numbered screenshots of the full flow, from sign-in (01) to the phone views (14 to 16).
+`C:\Users\User\projects\ap800-sentinel\demo-backup` holds numbered screenshots of the full flow in the final design, from sign-in to the phone view.
 
 ## Sign-in
 

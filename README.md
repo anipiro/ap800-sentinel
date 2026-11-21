@@ -13,7 +13,7 @@ Open http://localhost:4800 and choose a person to sign in as. Needs Node 22.13 o
 | Command | What it does |
 |---|---|
 | `npm start` | Runs the website, the simulated machine and the detection engine |
-| `npm test` | Runs the test suite (69 tests) |
+| `npm test` | Runs the test suite (77 tests) |
 | `npm run train` | Retrains the detection model on fresh synthetic data. Restart the server afterwards |
 | `npm run reset` | Deletes the database so the next start is clean |
 
@@ -98,6 +98,17 @@ Model metrics are measured on synthetic test data from the same simulator. They 
 - **Ask tab**: answers 13 kinds of question from the app's own records, with links. No AI service. Anything else gets the list of supported questions. Read-only; money answers need the manager.
 - **REST API**: read-only `GET /api/v1/issues`, `/api/v1/losses`, `/api/v1/kpis?period=1h|24h|7d` with `Authorization: Bearer <token>`. The token is the `API_TOKEN` environment variable; without it the API is off.
 - **Webhook** (Setup tab, manager): posts each new live issue as JSON to a configured address. Simulated issues are never posted.
+
+## Line chain (mentor feedback)
+
+All simulated, and labelled as such. None of it is an input to the trained fault model.
+
+- **Line chain** (top of the Live tab): forming (AP800), conveyor, blast freezer, packaging, each with live status, and a line saying where the problem is.
+- **Thermal view**: a toggle on the camera panel draws a simulated infrared heat map over the detected products and shows product temperature on the belt and at freezer entry.
+- **Blast freezer**: chamber temperature and compressor current rise when warm product enters. Product above the entry limit (18 °C by default, set by the manager on Setup) raises a quality warning and alerts the technician. Use the "Warm product reaches the freezer" test button.
+- **Motor drive (VFD)**: main drive current, torque and speed, winding temperature (PT100) and an over-temperature trip (PTC). Current rises with a jam, bearing wear, a roller wrap or thicker dough, and is attached to those diagnoses as supporting evidence. It does not change the diagnosis or its confidence.
+- **Data sources**: every chart names its source and connection, for example "Motor drive (VFD), main drive — Modbus TCP". The Setup tab lists all 25 readings with unit, signal type, device and connection.
+- The interface uses Nikora's colours: white, brand red, dark grey, light pink.
 
 ## Layout
 
