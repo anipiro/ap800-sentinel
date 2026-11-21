@@ -13,7 +13,7 @@ Open http://localhost:4800 and choose a person to sign in as. Needs Node 22.13 o
 | Command | What it does |
 |---|---|
 | `npm start` | Runs the website, the simulated machine and the detection engine |
-| `npm test` | Runs the test suite (59 tests) |
+| `npm test` | Runs the test suite (69 tests) |
 | `npm run train` | Retrains the detection model on fresh synthetic data. Restart the server afterwards |
 | `npm run reset` | Deletes the database so the next start is clean |
 
@@ -26,6 +26,7 @@ Copy `.env.example`. All are optional.
 | `PORT` | 4800 | Port of the website |
 | `ESCALATE_AFTER_S` | 20 | Seconds before an unacknowledged issue goes to the next person |
 | `TELEGRAM_BOT_TOKEN` | empty | Without it, Telegram messages are recorded but not sent |
+| `API_TOKEN` | empty | Token for the read-only REST API. Empty keeps the API off |
 | `DB_PATH` | `data/sentinel.db` | SQLite database file |
 
 ## What is real and what is not
@@ -87,7 +88,16 @@ Model metrics are measured on synthetic test data from the same simulator. They 
 - **My work tab**: a phone-width view of the active issue, the person's work orders and unassigned ones, plus a QR code that opens the machine's status page.
 - **Spare parts** (Work orders tab): stock per part, linked to issue types. An issue that needs a part at or below its minimum shows a reorder warning with the delivery time. The manager edits stock.
 - **Shift handover** (Summary tab): what happened this shift, what is open, and what the next shift should watch.
-- Not built: Georgian interface (draft material in `docs/i18n-draft`), AI assistant, model monitoring, API and webhooks.
+- Not built: Georgian interface (draft material in `docs/i18n-draft`).
+
+## Platform features (Phase 4)
+
+- **Audit tab** (manager): sign-ins, setting changes, approvals, rejections, overrides and automated actions in one list, built from the append-only history. Filter by kind, person or text; export CSV.
+- **Model health** (Setup tab): a data drift score checked every 30 seconds of clean running (the largest shift of any signal's average from its training value, in standard deviations), its trend, average confidence, and false alarms reported. The manager is alerted when drift passes the limit (default 2, editable). Technicians mark each issue as a real fault or a false alarm on the issue page. Every issue records the model version that raised it.
+- **Reports** (Summary tab, manager): daily and weekly reports as downloadable HTML files, a "send" button, and a schedule (daily at 08:00, weekly on Mondays). Sending goes to a mock notifier: it is recorded, nothing leaves the computer.
+- **Ask tab**: answers 13 kinds of question from the app's own records, with links. No AI service. Anything else gets the list of supported questions. Read-only; money answers need the manager.
+- **REST API**: read-only `GET /api/v1/issues`, `/api/v1/losses`, `/api/v1/kpis?period=1h|24h|7d` with `Authorization: Bearer <token>`. The token is the `API_TOKEN` environment variable; without it the API is off.
+- **Webhook** (Setup tab, manager): posts each new live issue as JSON to a configured address. Simulated issues are never posted.
 
 ## Layout
 
