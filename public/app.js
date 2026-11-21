@@ -142,7 +142,7 @@
       if (activeSig !== 'none') { activeSig = 'none'; box.innerHTML = `<p class="empty">${state.machine.stopped ? 'The machine is stopped. Undo the stop on the last issue to restart it.' : 'No active issue. When the model detects a problem it appears here with the reason, the people alerted and the actions taken.'}</p>`; }
       return;
     }
-    const sig = JSON.stringify([a.id, a.title, a.low, a.note, a.sensorNote, a.severity, a.acked, a.level, state.actions.map((x) => x.status + x.warn), ME.role, state.machine.stopped]);
+    const sig = JSON.stringify([a.id, a.title, a.low, a.note, a.sensorNote, a.severity, a.acked, a.level, state.actions.map((x) => x.status + x.warn), state.similar.map((k) => k.id), ME.role, state.machine.stopped]);
     if (sig !== activeSig) {
       activeSig = sig;
       box.innerHTML = `<div class="issue ${a.severity}">
@@ -159,8 +159,9 @@
         <span class="small ${a.acked ? '' : 'muted'}">${a.acked ? 'Acknowledged. Escalation stopped.' : `Not acknowledged yet. Escalates to the next person every ${state.escalateAfterS} s.`}</span>
         <div class="acts">${state.actions.map(actionRow).join('')}</div>
         <div class="row">${a.acked ? '' : `<button class="btn go" data-issue="ack" data-id="${a.id}">Acknowledge</button>`}
-          ${can('technician') ? `<input id="a-note" placeholder="What was fixed" aria-label="What was fixed" style="flex:1 1 140px"><button class="btn" data-issue="resolve" data-id="${a.id}">Mark resolved</button>` : ''}
           <a class="btn plain" href="#issue-${a.id}">Full record</a></div>
+        ${state.similar.length ? `<div><span class="small muted">Similar past issues and how they were fixed</span><ul class="list">${state.similar.map((k) => `<li><a href="#issue-${k.issue_id}">Issue ${k.issue_id}</a>: ${esc(k.root_cause)}. Fix: ${esc(k.fix)}${k.parts ? `. Parts: ${esc(k.parts)}` : ''}${k.minutes !== null ? `. Took ${k.minutes} min` : ''}</li>`).join('')}</ul></div>` : ''}
+        ${can('technician') ? `<div class="form" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))"><label>Root cause<input id="a-cause" placeholder="What was really wrong"></label><label>Fix<input id="a-note" placeholder="What was done"></label><label>Parts used<input id="a-parts" placeholder="None"></label><label>Time taken, minutes<input id="a-mins" type="number" min="0"></label></div><div class="row"><button class="btn" data-issue="resolve" data-id="${a.id}">Mark resolved</button><span class="small muted">Saved to the knowledge base for next time</span></div>` : ''}
         <p class="err"></p></div>`;
     }
     $('#a-why').innerHTML = (a.contributions.length ? a.contributions : ['Readings are returning to normal']).map((t) => `<li>${esc(t)}</li>`).join('');
@@ -170,7 +171,7 @@
   $('#active').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.act) act(b, `api/actions/${b.dataset.id}/${b.dataset.act}`);
-    if (b.dataset.issue) act(b, `api/issues/${b.dataset.id}/${b.dataset.issue}`, { note: ($('#a-note') || {}).value || '' });
+    if (b.dataset.issue) act(b, `api/issues/${b.dataset.id}/${b.dataset.issue}`, { note: ($('#a-note') || {}).value || '', root_cause: ($('#a-cause') || {}).value || '', parts: ($('#a-parts') || {}).value || '', minutes: ($('#a-mins') || {}).value || '' });
   });
   function renderInbox() {
     $('#inbox-panel').hidden = !state.inbox.length && !state.flagAlerts.length;
@@ -246,12 +247,16 @@
   const table = (heads, rows) => `<div class="scroll"><table><thead><tr>${heads.map((h) => `<th${h.startsWith('#') ? ' class="num"' : ''}>${h.replace(/^#/, '')}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${heads.length}" class="muted">Nothing recorded yet.</td></tr>`}</tbody></table></div>`;
   const statusText = { detected: 'Open', acknowledged: 'Acknowledged', resolved: 'Resolved', verified: 'Verified' };
 
+  let kbQuery = '';
   async function viewIssues() {
-    const list = await api('api/issues');
-    $('#v-issues').innerHTML = `<section class="panel"><div class="head"><h2>Issues</h2><a class="btn plain" href="api/issues.csv">Export CSV</a></div>
+    const list = await api('api/issues'), kbRows = await api('api/kb?q=' + encodeURIComponent(kbQuery));
+    $('#v-issues').innerHTML = `<section class="panel"><div class="head"><h2>Knowledge base</h2><form class="row" id="kbf"><input id="kb-q" placeholder="Search causes, fixes, parts" aria-label="Search the knowledge base" value="${esc(kbQuery)}"><button class="btn">Search</button></form></div>
+      ${table(['Issue', 'Problem', 'Root cause', 'Fix', 'Parts', '#Time', 'Recorded'], kbRows.map((k) => `<tr class="click" data-href="#issue-${k.issue_id}"><td>${k.issue_id}</td><td>${esc(k.title)}</td><td>${esc(k.root_cause)}</td><td>${esc(k.fix)}</td><td>${esc(k.parts || '')}</td><td class="num">${k.minutes === null ? '' : k.minutes + ' min'}</td><td class="small">${esc((k.recorded_by || '').replace(/ \(.*/, ''))}, ${stamp(k.created_at)}</td></tr>`))}</section>
+      <section class="panel"><div class="head"><h2>Issues</h2><a class="btn plain" href="api/issues.csv">Export CSV</a></div>
       ${table(['No.', 'Detected', 'Issue', 'Severity', 'Status', '#Confidence', '#Downtime', '#Loss', '#Saved'], list.map((i) => `<tr class="click" data-href="#issue-${i.id}"><td>${i.id}</td><td>${stamp(i.detected_at)}</td><td>${esc(i.title)}</td>
         <td><span class="sev ${i.severity}">${i.severity}</span></td><td>${statusText[i.status]}${i.resolved_by === 'system' ? ', cleared by itself' : ''}</td><td class="num">${Math.round(i.confidence * 100)} %</td>
         <td class="num">${(i.downtime_h * 60).toFixed(0)} min</td><td class="num">${money(i.actual_loss)}</td><td class="num">${money(i.savings)}</td></tr>`))}</section>`;
+    $('#kbf').onsubmit = (e) => { e.preventDefault(); kbQuery = $('#kb-q').value; viewIssues(); };
   }
   document.addEventListener('click', (e) => { const r = e.target.closest('tr.click'); if (r && r.dataset.href) location.hash = r.dataset.href; });
 
@@ -278,6 +283,8 @@
           <p><b>Recommended:</b> ${esc(i.recommended)}</p>${i.resolution ? `<p><b>Resolution:</b> ${esc(i.resolution)} (${esc(i.resolved_by)})</p>` : ''}</section>
         <section class="panel"><h2>Actions</h2>${table(['Action', 'Risk', 'Status', 'Decided by'], i.actions.map((a) => `<tr><td>${esc(a.label)}<br><span class="muted small">${esc(a.reason)}</span></td><td>${a.risk}</td><td>${a.status.replace('_', ' ')}</td><td>${esc(a.decided_name || (a.status === 'done' ? 'automatic' : ''))}</td></tr>`))}
           <h2>People alerted</h2>${table(['Person', 'Channel', 'Level', 'Sent', 'Status'], i.notifications.map((n) => `<tr><td>${esc(n.name)}</td><td>${n.channel.replace('_', '-')}</td><td>${n.level}</td><td>${clock(n.sent_at)}</td><td>${n.status.replace('_', ' ')}</td></tr>`))}</section></div>
+      <div class="half"><section class="panel"><h2>Root cause and fix</h2>${i.kb ? `<dl class="kv"><div><dt>Root cause</dt><dd style="font-size:.95rem">${esc(i.kb.root_cause)}</dd></div><div><dt>Fix</dt><dd style="font-size:.95rem">${esc(i.kb.fix)}</dd></div><div><dt>Parts used</dt><dd style="font-size:.95rem">${esc(i.kb.parts || 'none')}</dd></div><div><dt>Time taken</dt><dd>${i.kb.minutes === null ? 'not recorded' : i.kb.minutes + ' min'}</dd></div></dl><p class="note">Recorded by ${esc(i.kb.recorded_by || '')}, ${stamp(i.kb.created_at)}.</p>` : '<p class="empty">Nothing recorded. The technician fills this in when marking the issue resolved.</p>'}</section>
+        <section class="panel"><h2>Similar past issues</h2>${table(['Issue', 'Root cause', 'Fix', 'Parts', '#Time'], i.similar.map((k) => `<tr><td><a href="#issue-${k.issue_id}">${k.issue_id}</a></td><td>${esc(k.root_cause)}</td><td>${esc(k.fix)}</td><td>${esc(k.parts || '')}</td><td class="num">${k.minutes === null ? '' : k.minutes + ' min'}</td></tr>`))}</section></div>
       <section class="panel"><div class="head"><h2>Readings before, during and after</h2><span class="small muted">Red = flagged by the model</span></div><div class="charts big">${keys.map((k) => `<div class="chart"><span class="lab">${SIG[k].label} (${SIG[k].unit})</span><canvas id="ic-${k}"></canvas></div>`).join('')}</div></section>
       <section class="panel"><div class="head"><h2>Replay this incident</h2><span class="small muted">Real record, minute by minute on the demo clock</span></div><div id="iss-replay"></div></section>
       <section class="panel"><h2>Timeline</h2>${table(['Time', 'Who or what', 'What happened'], i.events.map((e) => `<tr><td>${clock(e.ts)}</td><td>${esc(e.actor)} <span class="muted">(${e.actor_type})</span></td><td>${esc(e.summary)}</td></tr>`))}</section>`;

@@ -80,3 +80,24 @@ test('KPIs: healthy running gives full availability; a stop lowers OEE and is co
   const empty = kpis(db, { period: '1h', now: now() + 5 * 3600000 });
   assert.equal(empty.oee, null); assert.equal(empty.recorded_h, 0);
 });
+
+// ---- knowledge base -------------------------------------------------------------
+const kb = require('../src/kb');
+test('knowledge base: fixes are recorded on resolve and offered on the next similar issue', () => {
+  const { db, eng, run } = rig();
+  run(30); eng.injectFault('jam', U.op); run(20);
+  const first = eng.active.id;
+  assert.deepEqual(kb.similar(db, { type: 'jam', excludeIssue: first }), []);
+  eng.resolve(first, U.tech, { note: 'Cleared the belt' });
+  const id = kb.record(db, { issueId: first, rootCause: 'Dumplings stuck under the belt at the transfer point', fix: 'Cleared the belt', parts: 'none', minutes: 12, by: 'Giorgi', now: eng.now() });
+  assert.ok(id);
+  assert.equal(kb.record(db, { issueId: first, rootCause: '', fix: '' }), null, 'empty entries are not stored');
+  assert.equal(kb.record(db, { issueId: 9999, rootCause: 'x', fix: 'y' }), null);
+  run(40); eng.injectFault('jam', U.op); run(20);
+  const again = eng.active.id; assert.notEqual(again, first);
+  const sim = kb.similar(db, { type: 'jam', excludeIssue: again });
+  assert.equal(sim.length, 1); assert.equal(sim[0].issue_id, first); assert.equal(sim[0].minutes, 12); assert.match(sim[0].root_cause, /transfer point/);
+  assert.equal(kb.similar(db, { type: 'bearing', excludeIssue: again }).length, 0);
+  assert.equal(kb.search(db, 'transfer').length, 1); assert.equal(kb.search(db, 'gearbox').length, 0); assert.equal(kb.search(db, '').length, 1);
+  assert.equal(kb.search(db, 'belt')[0].label, 'Belt jam');
+});

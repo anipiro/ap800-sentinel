@@ -12,6 +12,7 @@ const reports = require('./src/reports');
 const unusual = require('./src/unusual');
 const workorders = require('./src/workorders');
 const kpi = require('./src/kpi');
+const kb = require('./src/kb');
 const risk = require('./src/risk');
 const { runScenario, crossCheckComparison } = require('./src/sandbox');
 
@@ -69,13 +70,14 @@ async function api(req, res, url) {
   if (!user) return send(res, 401, { error: 'Sign in first' });
   if (p === '/api/me') return send(res, 200, { user, signals: SIG, faults: Object.fromEntries(Object.entries(FAULTS).filter(([, f]) => !f.untrained).map(([k, f]) => [k, f.name])), scenarios: Object.entries(FAULTS).map(([k, f]) => ({ key: k, name: f.name, trained: !f.untrained })), model: { version: versionId, trained_at: model.trainedAt, metrics: model.metrics }, baseline: model.base, alertZ: 6, timeScale: engine.timeScale });
   if (p === '/api/logout' && POST) { const c = /sid=([a-f0-9]+)/.exec(req.headers.cookie || ''); if (c) sessions.delete(c[1]); return send(res, 200, {}, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' }); }
-  if (p === '/api/state' && GET) return send(res, 200, { ...engine.state(Number(q.since) || 0, user), phone: { hist: phone.hist, live: Date.now() - phone.last < 5000 } });
+  if (p === '/api/state' && GET) { const st = engine.state(Number(q.since) || 0, user); return send(res, 200, { ...st, similar: st.active ? kb.similar(db, { type: st.active.type, title: st.active.title, excludeIssue: st.active.id }) : [], phone: { hist: phone.hist, live: Date.now() - phone.last < 5000 } }); }
+  if (p === '/api/kb' && GET) return send(res, 200, kb.search(db, q.q || ''));
 
   if (p === '/api/issues' && GET) return send(res, 200, reports.issues(db));
-  if ((m = /^\/api\/issues\/(\d+)$/.exec(p)) && GET) { const d = reports.issueDetail(db, Number(m[1])); return d ? send(res, 200, d) : send(res, 404, { error: 'No such issue' }); }
+  if ((m = /^\/api\/issues\/(\d+)$/.exec(p)) && GET) { const d = reports.issueDetail(db, Number(m[1])); if (d) { d.similar = kb.similar(db, { type: d.type, title: d.title, excludeIssue: d.id }); d.kb = db.prepare('SELECT * FROM kb_entries WHERE issue_id = ?').get(d.id) || null; } return d ? send(res, 200, d) : send(res, 404, { error: 'No such issue' }); }
   if ((m = /^\/api\/issues\/(\d+)\/(ack|resolve|verify)$/.exec(p)) && POST) {
     const body = await readBody(req), id = Number(m[1]);
-    if (m[2] === 'ack') engine.ack(id, user); else if (m[2] === 'resolve') engine.resolve(id, user, { note: String(body.note || '').slice(0, 300) }); else engine.verify(id, user);
+    if (m[2] === 'ack') engine.ack(id, user); else if (m[2] === 'resolve') { engine.resolve(id, user, { note: String(body.note || '').slice(0, 300) }); kb.record(db, { issueId: id, rootCause: body.root_cause, fix: body.note, parts: body.parts, minutes: body.minutes, by: user.name }); } else engine.verify(id, user);
     return send(res, 200, { ok: true });
   }
   if ((m = /^\/api\/actions\/(\d+)\/(approve|reject|revert)$/.exec(p)) && POST) {
