@@ -1,46 +1,77 @@
 # AP800 Sentinel
 
-Fault-detection MVP for the Signal-Pack AP800 dumpling machine.
+Fault detection and monitoring for the Signal-Pack AP800 dumpling machine. Hackathon build.
 
 ## Run
 
 ```
-node server.js
+npm start
 ```
 
-Open http://localhost:4800. No install step, no dependencies (Node 18+).
+Open http://localhost:4800 and choose a person to sign in as. Needs Node 22.13 or newer. No packages to install.
 
-## What is real and what is simulated
+| Command | What it does |
+|---|---|
+| `npm start` | Runs the website, the simulated machine and the detection engine |
+| `npm test` | Runs the test suite (12 tests) |
+| `npm run train` | Retrains the detection model on fresh synthetic data. Restart the server afterwards |
+| `npm run reset` | Deletes the database so the next start is clean |
 
-- Machine signals (motor currents, vibration, temperature, filling pressure, thickness) are simulated.
-- Baseline learning and fault detection are real code running on those signals: the first 20 seconds are recorded as "normal", then rules fire when signals leave the learned band.
-- The exit belt camera runs real image analysis on a 25-second clip of the actual machine: it finds products on the blue belt and measures belt movement. "Flagged" products during a test fault are simulated.
-- The phone sensor is a real sensor path: `public/device.html` reads the phone accelerometer and posts to `/api/ingest`; the dashboard learns its normal level and raises an incident when it rises.
+## Environment variables
+
+Copy `.env.example`. All are optional.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PORT` | 4800 | Port of the website |
+| `ESCALATE_AFTER_S` | 20 | Seconds before an unacknowledged issue goes to the next person |
+| `TELEGRAM_BOT_TOKEN` | empty | Without it, Telegram messages are recorded but not sent |
+| `DB_PATH` | `data/sentinel.db` | SQLite database file |
+
+## What is real and what is not
+
+- **Simulated:** all machine signals. There is no connection to a real AP800.
+- **Real code on simulated data:** the Isolation Forest model, fault classification, explanations, issue lifecycle, escalation, approval guardrails, loss calculation, history.
+- **Real data:** the exit-belt camera analysis runs on a 25-second clip of the actual machine. The phone sensor page reads a real accelerometer.
+- **Placeholders:** people, shifts, cost figures, the assumed kit cost used for ROI.
+- **Mock:** machine control. Commands are recorded and stop the simulated machine. Telegram is not sent.
+- **Demo clock:** one real second counts as one minute of production for durations and money.
+- **Sign-in:** pick a person, no password. Not suitable for real use.
+
+Model metrics are measured on synthetic test data from the same simulator. They say nothing about accuracy on a real machine.
+
+## Roles
+
+| Role | Can do |
+|---|---|
+| Operator | See everything except money and setup, acknowledge issues, use the fault test buttons |
+| Technician | Also resolve issues and run low-risk actions |
+| Manager | Also approve or undo machine actions, verify repairs, see losses, change settings and costs |
 
 ## Demo script
 
-1. Open the dashboard and wait for "Running normally".
-2. Under "Test a fault", press a fault. Within a few seconds the station turns red and an incident appears with the cause and what to check.
-3. Press "Back to normal". The incident clears by itself.
-4. Good ones to show: "Filling runs out" (pressure drops, defects climb), "Gearbox bearing wears" (warning first, then critical), "Exit belt jams" (the camera sees the belt stop).
+1. Sign in as Mariam (manager). Wait for "Running normally".
+2. On Live, press "Gearbox bearing wears". In about 3 seconds an issue opens with the reason, the readings behind it, time to failure, and the loss so far.
+3. Low-risk actions are already done. "Shut the machine down safely" waits for approval. Leave it for 20 seconds to show escalation to the next person.
+4. Approve the shutdown. The machine stops and downtime starts costing money.
+5. Type what was fixed and press "Mark resolved". The machine restarts.
+6. Open the issue's full record, then Losses, History and Summary.
+7. In a second browser, sign in as Nino (operator) to show that Losses and Setup are hidden and approval is refused.
 
-URL shortcuts: `?fast=1` shortens learning to 5 seconds, `?fault=starve` starts a fault automatically (tear, hopper, wrap, starve, block, cell, bearing, jam).
-
-## Phone as a sensor
-
-Phones only share motion data over HTTPS. Expose the server through an HTTPS tunnel, open the tunnel address on the laptop and `/device.html` on the phone, then press "Start sending".
-
-To test the path without a phone:
+## Layout
 
 ```
-curl -X POST localhost:4800/api/ingest -d "{\"vib_rms\":0.3}"
+server.js            routes and static files
+src/sim.js           simulated signals and faults
+src/ml/              Isolation Forest, detector, training
+src/core.js          engine: issues, notifications, escalation, remediation, losses, events
+src/adapters.js      notifier and actuator interfaces, real and mock
+src/loss.js          financial formulas
+src/reports.js       history, finance, summary queries
+src/catalog.js       issue types, actions, cost assumptions
+migrations/          database schema
+test/                node:test suites
+public/              dashboard and phone sensor page
+legacy/              the earlier browser-only MVP
+docs/, PLAN.md       architecture and plan
 ```
-
-Send about 15 readings near 0.3, then one near 2.5.
-
-## Files
-
-- `server.js` website, `/api/ingest`, `/api/stream`
-- `public/index.html`, `public/app.js` dashboard, simulator, detection, camera analysis
-- `public/device.html` phone sensor page
-- `docs/architecture.html` the full plan

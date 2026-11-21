@@ -1,33 +1,14 @@
-/* AP800 Sentinel MVP: simulated machine signals, baseline learning, rule-based fault detection,
-   live camera analysis of recorded belt footage, optional phone sensor over the local server. */
+/* AP800 Sentinel dashboard. The server runs the machine simulator, the ML detector and all records;
+   this file only draws what the server reports and sends the user's decisions back. */
 (() => {
-  const TICK_MS = 500, DT = TICK_MS / 1000;
-  const params = new URLSearchParams(location.search);
-  const LEARN_TICKS = params.has('fast') ? 10 : 40;
-  const HIST = 160, Z = 5;
   const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const HIST = 200;
+  let ME = null, SIG = {}, BASE = {}, ALERT_Z = 6, FAULTS = {}, MODEL = null;
+  let seq = 0, state = null, muted = false, lastIssueId = null, activeSig = '';
+  const ticks = [];   // { v, a }
 
-  // ---- Signals -------------------------------------------------------------
-  const SIG = {
-    cur_feed:  { label: 'Feeder current',              short: 'Current',   unit: 'A',    base: 1.1,  noise: 0.03,  dp: 2 },
-    cur_r12:   { label: 'Rollers 1–2 current',         short: 'Current',   unit: 'A',    base: 2.4,  noise: 0.05,  dp: 2 },
-    cur_r3:    { label: '3-roller groups current',     short: 'Current',   unit: 'A',    base: 2.8,  noise: 0.05,  dp: 2 },
-    cur_cal:   { label: 'Calibrating rollers current', short: 'Current',   unit: 'A',    base: 2.0,  noise: 0.04,  dp: 2 },
-    cur_drum:  { label: 'Drum drive current',          short: 'Current',   unit: 'A',    base: 3.1,  noise: 0.06,  dp: 2 },
-    cur_pump:  { label: 'Pump current',                short: 'Current',   unit: 'A',    base: 3.4,  noise: 0.06,  dp: 2 },
-    cur_belt:  { label: 'Belt motor current',          short: 'Current',   unit: 'A',    base: 0.6,  noise: 0.015, dp: 2 },
-    press:     { label: 'Filling pressure',            short: 'Pressure',  unit: 'MPa',  base: 0.25, noise: 0.004, dp: 3 },
-    thick:     { label: 'Sheet thickness',             short: 'Thickness', unit: 'mm',   base: 0.8,  noise: 0.008, dp: 2 },
-    vib_roll:  { label: 'Rolling gearbox vibration',   short: 'Vibration', unit: 'mm/s', base: 1.8,  noise: 0.08,  dp: 2 },
-    vib_drum:  { label: 'Drum vibration',              short: 'Vibration', unit: 'mm/s', base: 2.2,  noise: 0.1,   dp: 2 },
-    temp_gear: { label: 'Rolling gearbox temperature', short: 'Gearbox',   unit: '°C',   base: 48,   noise: 0.25,  dp: 1 },
-    defect:    { label: 'Defect rate',                 short: 'Defects',   unit: '%',    base: 1.2,  noise: 0.35,  dp: 1, floor: 0.5 },
-    rate:      { label: 'Output',                      short: 'Output',    unit: 'kg/h', base: 495,  noise: 4,     dp: 0 },
-    motion:    { label: 'Belt movement',               short: 'Movement',  unit: '%',    base: 6,    noise: 0.4,   dp: 1 },
-  };
-  const KEYS = Object.keys(SIG);
   const CHARTS = ['cur_feed', 'cur_r12', 'cur_r3', 'cur_cal', 'cur_drum', 'cur_pump', 'cur_belt', 'press', 'thick', 'vib_roll', 'temp_gear', 'defect'];
-
   const STATIONS = [
     { id: 'hopper', name: 'Dough hopper',        x: 20,  y: 70,  sig: ['cur_feed'] },
     { id: 'r12',    name: 'Rollers, stages 1–2', x: 200, y: 70,  sig: ['cur_r12', 'vib_roll', 'temp_gear'] },
@@ -37,289 +18,186 @@
     { id: 'belt',   name: 'Exit belt',           x: 920, y: 70,  sig: ['cur_belt', 'defect'] },
     { id: 'pump',   name: 'Filling pump',        x: 740, y: 270, sig: ['press', 'cur_pump'], side: true },
   ];
+  const RANK = { operator: 1, technician: 2, manager: 3 };
+  const can = (role) => ME && RANK[ME.role] >= RANK[role];
 
-  // ---- Faults that can be played into the simulator ------------------------
-  // Each returns multipliers / offsets for the signals, as a function of r(tau) = 1 - exp(-age/tau).
-  const FAULTS = {
-    tear:    { name: 'Dough sheet tears',     fx: (r) => ({ mul: { cur_cal: 1 - 0.55 * r(2), cur_drum: 1 - 0.5 * r(3), rate: 1 - r(4) } }) },
-    hopper:  { name: 'Hopper runs empty',     fx: (r) => ({ mul: { cur_feed: 1 - 0.6 * r(3), cur_r12: 1 - 0.55 * r(5), thick: 1 - 0.3 * r(6), cur_r3: 1 - 0.4 * r(8), cur_cal: 1 - 0.4 * r(10), cur_drum: 1 - 0.35 * r(12), rate: 1 - r(12) } }) },
-    wrap:    { name: 'Dough wraps a roller',  fx: (r) => ({ mul: { cur_r3: 1 + 0.7 * r(3), vib_roll: 1 + 0.5 * r(3), cur_cal: 1 - 0.5 * r(4), cur_drum: 1 - 0.45 * r(5), rate: 1 - r(5) } }) },
-    starve:  { name: 'Filling runs out',      fx: (r) => ({ mul: { press: 1 - 0.7 * r(3), cur_pump: 1 - 0.4 * r(3), rate: 1 - 0.3 * r(5) }, add: { defect: 55 * r(5) } }) },
-    block:   { name: 'Filling nozzle blocks', fx: (r) => ({ mul: { press: 1 + 0.7 * r(2), cur_pump: 1 + 0.35 * r(2) }, add: { defect: 40 * r(4) } }) },
-    cell:    { name: 'Drum cell clogs',       fx: (r) => ({ mul: { vib_drum: 1 + 0.12 * r(2) }, add: { defect: 9 * r(2) } }) },
-    bearing: { name: 'Gearbox bearing wears', fx: (r) => ({ mul: { vib_roll: 1 + 2.2 * r(25) }, add: { temp_gear: 22 * r(40) } }) },
-    jam:     { name: 'Exit belt jams',        fx: (r) => ({ mul: { cur_belt: 1 + 1.8 * r(1.5), motion: 1 - r(0.6), rate: 1 - r(3) } }) },
-  };
+  // ---- formatting ----------------------------------------------------------
+  const fmt = (k, v) => Number(v).toFixed(SIG[k].dp);
+  const money = (x) => Math.round(x || 0).toLocaleString('en') + ' GEL';
+  const clock = (ms) => (ms ? new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+  const stamp = (ms) => (ms ? new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+  const mins = (ms) => (ms === null || ms === undefined ? 'n/a' : Math.round(ms / 1000) + ' min');   // demo clock: 1 s = 1 min
+  const sevLabel = { ok: 'Running normally', low: 'Minor issue', medium: 'Warning', high: 'Serious issue', critical: 'Critical fault', stopped: 'Machine stopped' };
 
-  // ---- Detection rules -----------------------------------------------------
-  const RULES = [
-    { id: 'hopper', comp: ['hopper', 'r12'], sev: 'crit', hold: 4, sig: ['cur_feed', 'cur_r12'],
-      title: 'Dough is not reaching the first rollers',
-      cause: 'The hopper is empty or the dough has bridged above the feeder.',
-      check: ['Look into the dough hopper and refill it', 'Break up any dough stuck above the feeder'],
-      when: (d) => d.lo('cur_feed') && d.lo('cur_r12') },
-    { id: 'tear', comp: ['cal', 'r3'], sev: 'crit', hold: 4, sig: ['cur_cal', 'cur_drum'],
-      title: 'Dough sheet torn before the calibrating rollers',
-      cause: 'The first rollers are loaded but the calibrating rollers and drums are running empty.',
-      check: ['Stop the feed and re-thread the sheet', 'Check dough moisture and the sag setting'],
-      when: (d) => d.lo('cur_cal') && d.lo('cur_drum') && !d.lo('cur_r12') && !d.hi('cur_r3') },
-    { id: 'wrap', comp: ['r3'], sev: 'crit', hold: 4, sig: ['cur_r3', 'cur_cal'],
-      title: 'Dough wrapped around a roller',
-      cause: 'Load on the 3-roller groups is climbing while nothing arrives downstream.',
-      check: ['Stop the machine', 'Clear the wrapped dough and clean the scraper', 'Check the air blow nozzles'],
-      when: (d) => d.hi('cur_r3') && d.lo('cur_cal') },
-    { id: 'starve', comp: ['pump', 'drum'], sev: 'crit', hold: 4, sig: ['press', 'cur_pump', 'defect'],
-      title: 'Filling is not reaching the drums',
-      cause: 'Pump outlet pressure has fallen. The pump hopper is empty or has an air pocket.',
-      check: ['Refill the 140 L pump hopper', 'Check the pump agitator is turning', 'Hold the products made in the last minute for inspection'],
-      when: (d) => d.lo('press') },
-    { id: 'block', comp: ['pump', 'drum'], sev: 'crit', hold: 4, sig: ['press', 'cur_pump', 'defect'],
-      title: 'Filling line blocked',
-      cause: 'Pump outlet pressure is well above working level. The slot nozzle or hose is blocked.',
-      check: ['Stop the pump', 'Strip and clean the slot nozzle', 'Check the filling for bone or frozen lumps'],
-      when: (d) => d.hi('press') },
-    { id: 'cell', comp: ['drum'], sev: 'warn', hold: 6, sig: ['defect', 'press'],
-      title: 'More defective products than normal',
-      cause: 'Filling pressure and drive loads are normal, so the likely cause is a clogged drum cell or a stuck pusher.',
-      check: ['Watch the belt for the same lane failing each drum turn', 'Clean the drum cells at the next stop', 'Check the pusher cam'],
-      when: (d) => d.hi('defect') && !d.lo('press') && !d.hi('press') },
-    { id: 'vib', comp: ['r12'], sev: 'warn', hold: 6, sig: ['vib_roll', 'temp_gear'],
-      title: 'Rolling gearbox vibration is rising',
-      cause: 'Vibration has left its normal band while the load is unchanged. This is the usual sign of bearing wear or low oil.',
-      check: ['Check the gearbox oil level', 'Listen for bearing noise', 'Plan a bearing inspection'],
-      when: (d) => d.hi('vib_roll') && !d.hi('cur_r3') },
-    { id: 'heat', comp: ['r12'], sev: 'crit', hold: 6, sig: ['temp_gear', 'vib_roll'],
-      title: 'Rolling gearbox is overheating',
-      cause: 'Housing temperature is well above normal for this recipe.',
-      check: ['Stop the machine before the drive seizes', 'Check oil level and bearings'],
-      when: (d) => d.hi('temp_gear') },
-    { id: 'jam', comp: ['belt'], sev: 'crit', hold: 3, sig: ['cur_belt', 'motion'],
-      title: 'Exit belt jammed',
-      cause: 'The belt motor is overloaded and the camera sees no movement on the belt.',
-      check: ['Stop the machine', 'Clear product from under the belt and the transfer point'],
-      when: (d) => d.hi('cur_belt') || d.val('motion') < 0.2 * d.mean('motion') },
-  ];
-
-  // ---- State ---------------------------------------------------------------
-  const S = {
-    tick: 0, t: 0, fault: null, faultAt: 0, rateFactor: 1,
-    vals: {}, ew: {}, z: {}, hist: {}, learn: {}, base: null,
-    rules: {}, incidents: [], nextId: 1, dirty: true, muted: false,
-    vision: { live: false, count: 0, motion: 0, boxes: [] },
-  };
-  KEYS.forEach((k) => { S.hist[k] = []; S.learn[k] = []; });
-  RULES.forEach((r) => { S.rules[r.id] = { on: 0, off: 0, inc: null, snooze: 0 }; });
-
-  const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
-  const fmt = (k, v) => v.toFixed(SIG[k].dp);
-
-  // ---- Simulator -----------------------------------------------------------
-  function simulate() {
-    const age = S.fault ? S.t - S.faultAt : 0;
-    const r = (tau) => 1 - Math.exp(-age / tau);
-    const fx = S.fault ? FAULTS[S.fault].fx(r) : {};
-    const mul = fx.mul || {}, add = fx.add || {};
-    S.rateFactor = mul.rate ?? 1;
-    KEYS.forEach((k, i) => {
-      const s = SIG[k];
-      let v = (s.base * (1 + 0.01 * Math.sin(S.t / 37 + i)) + gauss() * s.noise) * (mul[k] ?? 1) + (add[k] ?? 0);
-      if (k === 'motion' && S.vision.live) v = S.vision.motion;   // measured from the footage
-      S.vals[k] = Math.max(0, v);
-    });
+  async function api(path, body) {
+    const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (r.status === 401) { showLogin(); throw new Error('Sign in first'); }
+    const j = r.status === 204 ? {} : await r.json();
+    if (!r.ok) throw new Error(j.error || 'Request failed');
+    return j;
+  }
+  // run an action from a button, show any refusal next to it
+  async function act(btn, path, body = {}) {
+    btn.disabled = true;
+    try { await api(path, body); await poll(); route(true); }
+    catch (e) { const box = btn.closest('.panel') && btn.closest('.panel').querySelector('.err'); if (box) box.textContent = e.message; }
+    btn.disabled = false;
   }
 
-  // ---- Baseline + detection ------------------------------------------------
-  function learnOrScore() {
-    KEYS.forEach((k) => {
-      const v = S.vals[k];
-      S.ew[k] = S.ew[k] === undefined ? v : 0.6 * S.ew[k] + 0.4 * v;
-      S.hist[k].push(v); if (S.hist[k].length > HIST) S.hist[k].shift();
-      if (!S.base) S.learn[k].push(v);
-    });
-    if (!S.base && S.tick >= LEARN_TICKS) {
-      S.base = {};
-      KEYS.forEach((k) => {
-        const a = S.learn[k], mean = a.reduce((p, c) => p + c, 0) / a.length;
-        const sd = Math.sqrt(a.reduce((p, c) => p + (c - mean) ** 2, 0) / a.length);
-        S.base[k] = { mean, sd: Math.max(sd, 0.02 * Math.abs(mean), SIG[k].floor || 1e-6) };
-      });
-      S.dirty = true;
-    }
-    if (!S.base) return;
-    KEYS.forEach((k) => { S.z[k] = (S.ew[k] - S.base[k].mean) / S.base[k].sd; });
-    const d = { lo: (k) => S.z[k] < -Z, hi: (k) => S.z[k] > Z, val: (k) => S.ew[k], mean: (k) => S.base[k].mean };
-    RULES.forEach((rule) => {
-      const rs = S.rules[rule.id];
-      if (rule.when(d)) {
-        rs.on++; rs.off = 0;
-        if (!rs.inc && rs.on >= rule.hold && S.t >= rs.snooze) openIncident(rule, rs);
-      } else {
-        rs.on = 0;
-        if (rs.inc && ++rs.off >= 10) { rs.inc.status = 'cleared'; rs.inc.end = new Date(); rs.inc = null; S.dirty = true; }
-      }
-    });
+  // ---- sign-in -------------------------------------------------------------
+  async function showLogin() {
+    $('#app').hidden = true; $('#login').hidden = false; ME = null;
+    const people = await (await fetch('api/people')).json();
+    $('#people').innerHTML = people.map((p) => `<button data-id="${p.id}"><span>${esc(p.name)}</span><span class="muted">${p.role}</span></button>`).join('');
   }
+  $('#people').addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    await api('api/login', { user_id: Number(b.dataset.id) }); start();
+  });
+  $('#logout').addEventListener('click', async () => { await api('api/logout', {}); showLogin(); });
 
-  function openIncident(rule, rs) {
-    const ev = rule.sig.map((k) => `${SIG[k].label} ${fmt(k, S.ew[k])} ${SIG[k].unit}, normal ${fmt(k, S.base[k].mean)}`);
-    rs.inc = { id: S.nextId++, rule, at: new Date(), status: 'open', evidence: ev };
-    S.incidents.unshift(rs.inc); S.incidents.length = Math.min(S.incidents.length, 12);
-    S.dirty = true;
-    if (rule.sev === 'crit') beep();
-  }
-
-  const active = () => S.incidents.filter((i) => i.status === 'open' || i.status === 'ack');
-  const worst = (list) => list.some((i) => i.rule.sev === 'crit') ? 'crit' : list.length ? 'warn' : 'ok';
-
-  // ---- Alarm sound ---------------------------------------------------------
+  // ---- alarm ---------------------------------------------------------------
   let audio = null;
   document.addEventListener('click', () => { try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { /* no audio */ } }, { once: true });
   function beep() {
-    if (S.muted || !audio) return;
-    try {
-      [0, 0.25].forEach((off) => {
-        const o = audio.createOscillator(), g = audio.createGain();
-        o.frequency.value = 880; g.gain.value = 0.08; o.connect(g); g.connect(audio.destination);
-        o.start(audio.currentTime + off); o.stop(audio.currentTime + off + 0.15);
-      });
-    } catch (e) { /* ignore */ }
+    if (muted || !audio) return;
+    try { [0, 0.25].forEach((o) => { const osc = audio.createOscillator(), g = audio.createGain(); osc.frequency.value = 880; g.gain.value = 0.08; osc.connect(g); g.connect(audio.destination); osc.start(audio.currentTime + o); osc.stop(audio.currentTime + o + 0.15); }); } catch (e) { /* ignore */ }
   }
+  $('#mute').addEventListener('click', (e) => { muted = !muted; e.target.setAttribute('aria-pressed', muted); e.target.textContent = muted ? 'Alarm muted' : 'Mute alarm'; });
 
-  // ---- Line view -----------------------------------------------------------
+  // ---- line view -----------------------------------------------------------
   function buildLine() {
     const W = 150, H = 70;
     let s = `<svg viewBox="0 0 1100 345" role="img" aria-label="The machine as six stations and the filling pump, each coloured by health">
       <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
-      <path class="dash" d="M815 70 V28 H95 V68" marker-end="url(#ar)"/>
-      <text class="cap" x="455" y="20" text-anchor="middle">dough offcuts return to the hopper</text>
-      <path class="wire" d="M878 270 V144" marker-end="url(#ar)"/>
-      <text class="cap" x="870" y="250" text-anchor="end">filling</text>`;
+      <path class="dash" d="M815 70 V28 H95 V68" marker-end="url(#ar)"/><text class="cap" x="455" y="20" text-anchor="middle">dough offcuts return to the hopper</text>
+      <path class="wire" d="M878 270 V144" marker-end="url(#ar)"/><text class="cap" x="870" y="250" text-anchor="end">filling</text>`;
     for (let i = 0; i < 5; i++) s += `<path class="wire" d="M${172 + i * 180} 105 H${197 + i * 180}" marker-end="url(#ar)"/>`;
     STATIONS.forEach((st) => {
-      s += `<g class="st learn" id="st-${st.id}"><rect x="${st.x}" y="${st.y}" width="${W}" height="${H}" rx="3"/>
+      s += `<g class="st" id="st-${st.id}"><rect x="${st.x}" y="${st.y}" width="${W}" height="${H}" rx="3"/>
         <text class="nm" x="${st.x + W / 2}" y="${st.y + 28}" text-anchor="middle">${st.name}</text>
-        <text class="hl" id="hl-${st.id}" x="${st.x + W / 2}" y="${st.y + 50}" text-anchor="middle">Learning</text></g>`;
-      st.sig.forEach((k, j) => {
-        const x = st.side ? st.x + W + 12 : st.x + 4, y = st.side ? st.y + 26 + j * 20 : st.y + H + 22 + j * 19;
-        s += `<text class="lv" id="lv-${k}" x="${x}" y="${y}"></text>`;
-      });
+        <text class="hl" id="hl-${st.id}" x="${st.x + W / 2}" y="${st.y + 50}" text-anchor="middle">OK</text></g>`;
+      st.sig.forEach((k, j) => { const x = st.side ? st.x + W + 12 : st.x + 4, y = st.side ? st.y + 26 + j * 20 : st.y + H + 22 + j * 19; s += `<text class="lv" id="lv-${k}" x="${x}" y="${y}"></text>`; });
     });
     $('#line').innerHTML = s + '</svg>';
   }
-
-  function renderLine() {
-    const act = active();
+  function renderLine(v) {
+    const a = state.active, stopped = state.machine.stopped;
     STATIONS.forEach((st) => {
-      const mine = act.filter((i) => i.rule.comp.includes(st.id));
-      const h = S.base ? worst(mine) : 'learn';
-      $('#st-' + st.id).setAttribute('class', 'st ' + h);
-      $('#hl-' + st.id).textContent = { learn: 'Learning', ok: 'OK', warn: 'Warning', crit: 'Fault' }[h];
-      st.sig.forEach((k) => {
-        const el = $('#lv-' + k);
-        el.textContent = `${SIG[k].short} ${fmt(k, S.ew[k])} ${SIG[k].unit}`;
-        el.setAttribute('class', 'lv' + (S.base && Math.abs(S.z[k]) > Z ? ' off' : ''));
-      });
+      const hit = a && a.comp.includes(st.id);
+      const cls = stopped ? 'off' : hit ? (['critical', 'high'].includes(a.severity) ? 'crit' : 'warn') : 'ok';
+      $('#st-' + st.id).setAttribute('class', 'st ' + cls);
+      $('#hl-' + st.id).textContent = { off: 'Stopped', ok: 'OK', warn: 'Warning', crit: 'Fault' }[cls];
+      st.sig.forEach((k) => { const el = $('#lv-' + k); el.textContent = `${SIG[k].short} ${fmt(k, v[k])} ${SIG[k].unit}`; el.setAttribute('class', 'lv' + (Math.abs(state.z[k] || 0) > ALERT_Z ? ' bad' : '')); });
     });
   }
 
-  // ---- Charts --------------------------------------------------------------
+  // ---- charts --------------------------------------------------------------
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  function buildCharts() {
-    $('#charts').innerHTML = CHARTS.map((k) => `<div class="chart" id="ch-${k}"><span class="lab">${SIG[k].label}</span>
-      <span class="val"><span id="cv-${k}">0</span> <small>${SIG[k].unit}</small></span><canvas id="cc-${k}"></canvas></div>`).join('');
-  }
-  function drawSeries(cv, data, base, off, col) {
+  const colours = () => ({ band: css('--accent-soft'), fg: css('--fg'), crit: css('--crit') });
+  function drawSeries(cv, data, flags, base, col, span) {
     const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
-    if (!w || !h) return;
+    if (!w || !h || !data.length) return;
     if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
     const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
     let lo = Math.min(...data), hi = Math.max(...data);
-    if (base) { lo = Math.min(lo, base.mean - (Z + 2) * base.sd); hi = Math.max(hi, base.mean + (Z + 2) * base.sd); }
+    if (base) { lo = Math.min(lo, base.mean - (ALERT_Z + 2) * base.sd); hi = Math.max(hi, base.mean + (ALERT_Z + 2) * base.sd); }
     if (hi - lo < 1e-9) { hi += 1; lo -= 1; }
-    const y = (v) => h - 3 - ((v - lo) / (hi - lo)) * (h - 6), x = (i) => (i / (HIST - 1)) * w;
-    if (base) { c.fillStyle = col.band; const y1 = y(base.mean + Z * base.sd), y2 = y(base.mean - Z * base.sd); c.fillRect(0, y1, w, y2 - y1); }
-    c.beginPath(); data.forEach((v, i) => (i ? c.lineTo(x(i), y(v)) : c.moveTo(x(i), y(v))));
-    c.lineWidth = 1.6; c.strokeStyle = off ? col.crit : col.fg; c.stroke();
-    if (data.length) { c.beginPath(); c.arc(x(data.length - 1), y(data[data.length - 1]), 2.6, 0, 7); c.fillStyle = off ? col.crit : col.fg; c.fill(); }
+    const n = Math.max(span || data.length, 2), y = (v) => h - 3 - ((v - lo) / (hi - lo)) * (h - 6), x = (i) => (i / (n - 1)) * w;
+    if (base) { c.fillStyle = col.band; const y1 = y(base.mean + ALERT_Z * base.sd), y2 = y(base.mean - ALERT_Z * base.sd); c.fillRect(0, y1, w, y2 - y1); }
+    c.lineWidth = 1.6;
+    for (let i = 1; i < data.length; i++) { c.beginPath(); c.moveTo(x(i - 1), y(data[i - 1])); c.lineTo(x(i), y(data[i])); c.strokeStyle = flags && flags[i] ? col.crit : col.fg; c.stroke(); }
+    const last = data.length - 1; c.beginPath(); c.arc(x(last), y(data[last]), 2.6, 0, 7); c.fillStyle = flags && flags[last] ? col.crit : col.fg; c.fill();
   }
-  function renderCharts() {
-    const col = { band: css('--accent-soft'), fg: css('--fg'), crit: css('--crit') };
+  function buildCharts() {
+    $('#charts').innerHTML = CHARTS.map((k) => `<div class="chart" id="ch-${k}"><span class="lab">${SIG[k].label}</span><span class="val"><span id="cv-${k}">0</span> <small>${SIG[k].unit}</small></span><canvas id="cc-${k}"></canvas></div>`).join('');
+  }
+  function renderCharts(v) {
+    const col = colours(), flags = ticks.map((t) => t.a);
     CHARTS.forEach((k) => {
-      const off = !!S.base && Math.abs(S.z[k]) > Z;
-      $('#ch-' + k).className = 'chart' + (off ? ' off' : '');
-      $('#cv-' + k).textContent = fmt(k, S.ew[k]);
-      drawSeries($('#cc-' + k), S.hist[k], S.base && S.base[k], off, col);
+      const bad = Math.abs(state.z[k] || 0) > ALERT_Z;
+      $('#ch-' + k).className = 'chart' + (bad ? ' bad' : '');
+      $('#cv-' + k).textContent = fmt(k, v[k]);
+      drawSeries($('#cc-' + k), ticks.map((t) => t.v[k]), bad ? flags : null, BASE[k], col, HIST);
     });
-    if (!$('#dev-chart').hidden) drawSeries($('#dev-cv'), DEV.hist, DEV.base, DEV.off, col);
+    const ph = state.phone;
+    $('#dev-state').textContent = ph.live ? 'Connected' : ph.hist.length ? 'No recent readings' : 'Not connected';
+    $('#dev-chart').hidden = !ph.hist.length; $('#dev-help').hidden = ph.live;
+    if (ph.hist.length) { $('#dev-val').textContent = ph.hist[ph.hist.length - 1].toFixed(2); drawSeries($('#dev-cv'), ph.hist, null, null, col, 120); }
   }
 
-  // ---- Incidents -----------------------------------------------------------
-  const clock = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  function renderIncidents() {
-    if (!S.dirty) return; S.dirty = false;
-    $('#inc-empty').hidden = S.incidents.length > 0;
-    $('#incidents').innerHTML = S.incidents.map((i) => {
-      const live = i.status === 'open' || i.status === 'ack', r = i.rule;
-      const sev = !live ? (i.status === 'false' ? 'Marked false alarm' : 'Cleared ' + clock(i.end)) : (r.sev === 'crit' ? 'Critical' : 'Warning') + (i.status === 'ack' ? ', acknowledged' : '');
-      return `<li class="${live ? r.sev : 'done'}"><div class="top"><h3>${r.title}</h3><span class="sev">${sev}</span></div>
-        <span class="small muted">${clock(i.at)}</span>
-        ${live ? `<p class="small">${r.cause}</p><div class="ev">${i.evidence.join('<br>')}</div>
-        <ul>${r.check.map((c) => `<li>${c}</li>`).join('')}</ul>
-        <div class="row">${i.status === 'open' ? `<button class="btn" data-ack="${i.id}">Acknowledge</button>` : ''}<button class="btn plain" data-false="${i.id}">False alarm</button></div>` : ''}</li>`;
-    }).join('');
+  // ---- active issue --------------------------------------------------------
+  function actionRow(a) {
+    const st = { done: 'Done', pending_approval: 'Waiting for manager approval', suggested: 'Suggested', rejected: 'Rejected', reverted: 'Undone', cancelled: 'Cancelled' }[a.status] || a.status;
+    let b = '';
+    const role = a.risk === 'physical' ? 'manager' : 'technician';
+    if (['pending_approval', 'suggested'].includes(a.status) && can(role)) b = `<button class="btn go" data-act="approve" data-id="${a.id}">${a.status === 'suggested' ? 'Run' : 'Approve'}</button><button class="btn plain" data-act="reject" data-id="${a.id}">Reject</button>`;
+    else if (a.status === 'done' && a.reversible && can(role)) b = `<button class="btn plain" data-act="revert" data-id="${a.id}">Undo</button>`;
+    return `<div class="act"><span><b>${esc(a.label)}</b><br><span class="muted">${st}${a.risk === 'physical' ? ', changes what the machine does' : ''}</span></span><span class="row">${b}</span></div>`;
   }
-  $('#incidents').addEventListener('click', (e) => {
-    const a = e.target.dataset.ack, f = e.target.dataset.false;
-    const inc = S.incidents.find((i) => i.id === Number(a || f)); if (!inc) return;
-    if (a) inc.status = 'ack';
-    if (f) { inc.status = 'false'; inc.end = new Date(); const rs = S.rules[inc.rule.id]; if (rs) { rs.inc = null; rs.snooze = S.t + 60; } else DEV.inc = null; }
-    S.dirty = true; renderIncidents();
-  });
-  $('#mute').addEventListener('click', (e) => { S.muted = !S.muted; e.target.setAttribute('aria-pressed', S.muted); e.target.textContent = S.muted ? 'Alarm muted' : 'Mute alarm'; });
-
-  // ---- Fault injector ------------------------------------------------------
-  function buildFaults() {
-    $('#faults').innerHTML = Object.entries(FAULTS).map(([k, f]) => `<button class="btn" data-fault="${k}" aria-pressed="false" disabled>${f.name}</button>`).join('') +
-      '<button class="btn plain" data-fault="" disabled>Back to normal</button>';
-    $('#faults').addEventListener('click', (e) => { if (e.target.dataset.fault !== undefined) setFault(e.target.dataset.fault || null); });
-  }
-  function setFault(k) {
-    S.fault = k; S.faultAt = S.t;
-    document.querySelectorAll('#faults [data-fault]').forEach((b) => b.setAttribute('aria-pressed', !!k && b.dataset.fault === k));
-    const v = $('#vid'); if (k === 'jam') v.pause(); else v.play().catch(() => {});
-  }
-
-  // ---- Camera analysis (real pixels from the footage) ----------------------
-  const VW = 320, VH = 180;
-  const off = document.createElement('canvas'); off.width = VW; off.height = VH;
-  const octx = off.getContext('2d', { willReadFrequently: true });
-  let prevGray = null;
-  function analyse() {
-    const v = $('#vid'); if (v.readyState < 2) return;
-    let px;
-    try { octx.drawImage(v, 0, 0, VW, VH); px = octx.getImageData(0, 0, VW, VH).data; } catch (e) { S.vision.live = false; return; }
-    const n = VW * VH, blue = new Uint8Array(n), cream = new Uint8Array(n), gray = new Uint8Array(n);
-    for (let i = 0, p = 0; i < n; i++, p += 4) {
-      const r = px[p], g = px[p + 1], b = px[p + 2];
-      blue[i] = b > r + 45 && b > g + 12 && b > 90 ? 1 : 0;
-      cream[i] = r > 165 && g > 155 && b > 105 && r - b > 12 && r - b < 90 ? 1 : 0;
-      gray[i] = (r + g + b) / 3;
+  function renderActive() {
+    const a = state.active, box = $('#active');
+    $('#auto-state').textContent = state.automation ? 'Automation on' : 'Automation off';
+    if (!a) {
+      if (activeSig !== 'none') { activeSig = 'none'; box.innerHTML = `<p class="empty">${state.machine.stopped ? 'The machine is stopped. Undo the stop on the last issue to restart it.' : 'No active issue. When the model detects a problem it appears here with the reason, the people alerted and the actions taken.'}</p>`; }
+      return;
     }
-    // movement: share of pixels that changed since the last look
-    if (prevGray) { let ch = 0; for (let i = 0; i < n; i++) if (Math.abs(gray[i] - prevGray[i]) > 18) ch++; S.vision.motion = (100 * ch) / n; }
-    prevGray = gray;
-    // integral image of belt-blue, so a product only counts if it sits on the belt
+    const sig = JSON.stringify([a.id, a.severity, a.acked, a.level, state.actions.map((x) => x.status), ME.role, state.machine.stopped]);
+    if (sig !== activeSig) {
+      activeSig = sig;
+      box.innerHTML = `<div class="issue ${a.severity}">
+        <div class="head"><h3>${esc(a.title)}</h3><span class="sev ${a.severity}">${a.severity}</span></div>
+        <span class="small muted">${esc(a.label)}, model confidence ${Math.round(a.confidence * 100)} %, detected ${clock(a.detectedAt)}</span>
+        <p class="small">${esc(a.cause)}</p>
+        <div><span class="small muted">Why the model flagged it</span><ul class="list" id="a-why"></ul></div>
+        <div><span class="small muted">What to check</span><ul class="list">${a.check.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></div>
+        <dl class="kv"><div><dt>Loss so far</dt><dd id="a-loss"></dd></div><div><dt>Time to failure</dt><dd id="a-rul"></dd></div><div><dt>Alerted</dt><dd>Level ${a.level} of 3</dd></div></dl>
+        <span class="small ${a.acked ? '' : 'muted'}">${a.acked ? 'Acknowledged. Escalation stopped.' : `Not acknowledged yet. Escalates to the next person every ${state.escalateAfterS} s.`}</span>
+        <div class="acts">${state.actions.map(actionRow).join('')}</div>
+        <div class="row">${a.acked ? '' : `<button class="btn go" data-issue="ack" data-id="${a.id}">Acknowledge</button>`}
+          ${can('technician') ? `<input id="a-note" placeholder="What was fixed" aria-label="What was fixed" style="flex:1 1 140px"><button class="btn" data-issue="resolve" data-id="${a.id}">Mark resolved</button>` : ''}
+          <a class="btn plain" href="#issue-${a.id}">Full record</a></div>
+        <p class="err"></p></div>`;
+    }
+    $('#a-why').innerHTML = (a.contributions.length ? a.contributions : ['Readings are returning to normal']).map((t) => `<li>${esc(t)}</li>`).join('');
+    $('#a-loss').textContent = money(a.loss);
+    $('#a-rul').textContent = a.rul === null ? 'n/a' : a.rul + ' min';
+  }
+  $('#active').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.act) act(b, `api/actions/${b.dataset.id}/${b.dataset.act}`);
+    if (b.dataset.issue) act(b, `api/issues/${b.dataset.id}/${b.dataset.issue}`, { note: ($('#a-note') || {}).value || '' });
+  });
+  function renderInbox() {
+    $('#inbox-panel').hidden = !state.inbox.length;
+    $('#inbox').innerHTML = state.inbox.map((n) => `<div class="act"><span><b>${esc(n.title)}</b><br><span class="muted">Sent to you ${clock(n.sent_at)}, escalation level ${n.level}</span></span><button class="btn go" data-id="${n.issue_id}">Acknowledge</button></div>`).join('');
+  }
+  $('#inbox').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) act(b, `api/issues/${b.dataset.id}/ack`); });
+
+  // ---- fault injector ------------------------------------------------------
+  function buildFaults() {
+    $('#faults').innerHTML = Object.entries(FAULTS).map(([k, n]) => `<button class="btn" data-fault="${k}" aria-pressed="false">${esc(n)}</button>`).join('') + '<button class="btn plain" data-fault="">Back to normal</button>';
+  }
+  $('#faults').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) act(b, 'api/demo/fault', { fault: b.dataset.fault || null }); });
+
+  // ---- camera analysis (real pixels from the footage) ----------------------
+  const VW = 320, VH = 180, off = document.createElement('canvas'); off.width = VW; off.height = VH;
+  const octx = off.getContext('2d', { willReadFrequently: true });
+  let boxes = [];
+  function analyse() {
+    const v = $('#vid'); if (!state || $('#v-live').hidden || v.readyState < 2) return;
+    let px; try { octx.drawImage(v, 0, 0, VW, VH); px = octx.getImageData(0, 0, VW, VH).data; } catch (e) { return; }
+    const n = VW * VH, blue = new Uint8Array(n), cream = new Uint8Array(n);
+    for (let i = 0, p = 0; i < n; i++, p += 4) { const r = px[p], g = px[p + 1], b = px[p + 2]; blue[i] = b > r + 45 && b > g + 12 && b > 90 ? 1 : 0; cream[i] = r > 165 && g > 155 && b > 105 && r - b > 12 && r - b < 90 ? 1 : 0; }
     const IW = VW + 1, integ = new Int32Array(IW * (VH + 1));
     for (let y = 0; y < VH; y++) { let row = 0; for (let x = 0; x < VW; x++) { row += blue[y * VW + x]; integ[(y + 1) * IW + x + 1] = integ[y * IW + x + 1] + row; } }
     const R = 12, mask = new Uint8Array(n);
     for (let y = 0; y < VH; y++) for (let x = 0; x < VW; x++) {
       const i = y * VW + x; if (!cream[i]) continue;
       const x0 = Math.max(0, x - R), x1 = Math.min(VW, x + R + 1), y0 = Math.max(0, y - R), y1 = Math.min(VH, y + R + 1);
-      const sum = integ[y1 * IW + x1] - integ[y0 * IW + x1] - integ[y1 * IW + x0] + integ[y0 * IW + x0];
-      if (sum > 75) mask[i] = 1;
+      if (integ[y1 * IW + x1] - integ[y0 * IW + x1] - integ[y1 * IW + x0] + integ[y0 * IW + x0] > 75) mask[i] = 1;
     }
-    // connected blobs
-    const boxes = [], stack = [];
+    boxes = []; const stack = [];
     for (let i = 0; i < n; i++) {
       if (!mask[i]) continue;
       let x0 = VW, x1 = 0, y0 = VH, y1 = 0, size = 0; stack.push(i); mask[i] = 0;
@@ -333,89 +211,157 @@
       }
       if (size >= 12 && size <= 400) boxes.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
     }
-    S.vision.boxes = boxes; S.vision.count = boxes.length; S.vision.live = true;
-    renderCamera();
-  }
-  function renderCamera() {
-    const cv = $('#ov'), c = cv.getContext('2d'), k = cv.width / VW;
+    const cv = $('#ov'), c = cv.getContext('2d'), k = cv.width / VW, v2 = ticks.length ? ticks[ticks.length - 1].v : null;
     c.clearRect(0, 0, cv.width, cv.height);
-    const starved = S.rateFactor < 0.35 && S.fault !== 'jam';
-    const veil = $('#veil');
-    veil.hidden = !(starved || S.fault === 'jam');
-    veil.textContent = S.fault === 'jam' ? 'Belt stopped' : 'Simulated: no product reaching the belt';
-    const pBad = Math.min(0.9, (S.vals.defect || 0) / 100);
-    let bad = 0;
-    if (!starved) S.vision.boxes.forEach((b) => {
-      const isBad = S.fault && S.fault !== 'jam' && Math.random() < pBad; if (isBad) bad++;
-      c.lineWidth = isBad ? 3 : 1.5; c.strokeStyle = isBad ? '#ff5a4d' : '#59e08c';
-      c.strokeRect(b.x * k - 2, b.y * k - 2, b.w * k + 4, b.h * k + 4);
-    });
-    $('#v-count').textContent = starved ? 0 : S.vision.count;
-    $('#v-bad').textContent = bad;
-    $('#v-move').textContent = S.vision.motion.toFixed(1) + ' %';
+    const frozen = state.machine.stopped || state.machine.fault === 'jam', starved = !frozen && v2 && v2.rate < 170;
+    if (frozen && !v.paused) v.pause(); if (!frozen && v.paused) v.play().catch(() => {});
+    $('#veil').hidden = !(frozen || starved); $('#veil').textContent = frozen ? 'Belt stopped' : 'Simulated: no product reaching the belt';
+    const pBad = state.active && v2 ? Math.min(0.9, v2.defect / 100) : 0; let bad = 0;
+    if (!starved) boxes.forEach((b) => { const isBad = Math.random() < pBad; if (isBad) bad++; c.lineWidth = isBad ? 3 : 1.5; c.strokeStyle = isBad ? '#ff5a4d' : '#59e08c'; c.strokeRect(b.x * k - 2, b.y * k - 2, b.w * k + 4, b.h * k + 4); });
+    $('#v-count').textContent = starved ? 0 : boxes.length; $('#v-bad').textContent = bad;
   }
 
-  // ---- Phone sensor over the local server ----------------------------------
-  const DEV = { hist: [], learn: [], base: null, off: false, hot: 0, inc: null, last: 0 };
-  const DEV_RULE = { id: 'device', comp: [], sev: 'warn', title: 'Phone sensor: vibration above normal',
-    cause: 'The vibration measured by the phone has left the range it learned.', check: ['Check what the phone is mounted on'] };
-  function onDevice(m) {
-    const v = Number(m.vib_rms); if (!isFinite(v)) return;
-    DEV.last = Date.now();
-    $('#dev-chart').hidden = false; $('#dev-relearn').hidden = false; $('#dev-help').hidden = true;
-    $('#dev-val').textContent = v.toFixed(2);
-    DEV.hist.push(v); if (DEV.hist.length > HIST) DEV.hist.shift();
-    if (!DEV.base) {
-      DEV.learn.push(v); $('#dev-state').textContent = `Learning, ${DEV.learn.length} of 15`;
-      if (DEV.learn.length >= 15) {
-        const a = DEV.learn, mean = a.reduce((p, c) => p + c, 0) / a.length;
-        const sd = Math.sqrt(a.reduce((p, c) => p + (c - mean) ** 2, 0) / a.length);
-        DEV.base = { mean, sd: Math.max(sd, 0.1 * mean, 0.02) };
-      }
-      return;
-    }
-    DEV.off = (v - DEV.base.mean) / DEV.base.sd > Z;
-    DEV.hot = DEV.off ? DEV.hot + 1 : 0;
-    $('#dev-state').textContent = DEV.off ? 'Above normal' : 'Connected, normal';
-    if (DEV.hot >= 2 && !DEV.inc) {
-      DEV.inc = { id: S.nextId++, rule: DEV_RULE, at: new Date(), status: 'open', evidence: [`Vibration ${v.toFixed(2)} m/s², normal ${DEV.base.mean.toFixed(2)}`] };
-      S.incidents.unshift(DEV.inc); S.dirty = true; beep();
-    } else if (!DEV.off && DEV.inc && DEV.inc.status !== 'false') { DEV.inc.status = 'cleared'; DEV.inc.end = new Date(); DEV.inc = null; S.dirty = true; }
-    else if (!DEV.off) DEV.inc = null;
-  }
-  $('#dev-relearn').addEventListener('click', () => { DEV.base = null; DEV.learn = []; DEV.hot = 0; });
-  try {
-    const es = new EventSource('api/stream');
-    es.onmessage = (e) => { try { onDevice(JSON.parse(e.data)); } catch (err) { /* bad message */ } };
-    es.onerror = () => { if (es.readyState === 2) $('#dev-state').textContent = 'Not connected'; };
-  } catch (e) { /* static hosting: no server */ }
-
-  // ---- Header + loop -------------------------------------------------------
-  function renderHeader() {
-    const pill = $('#status'), act = active();
-    if (!S.base) { pill.className = 'pill learn'; pill.textContent = 'Learning normal running'; }
-    else { const w = worst(act); pill.className = 'pill ' + w; pill.textContent = { ok: 'Running normally', warn: 'Warning', crit: 'Fault' }[w]; }
-    $('#s-rate').textContent = Math.round(S.ew.rate);
-    $('#s-def').textContent = S.ew.defect.toFixed(1);
-    const sec = Math.floor(S.t); $('#s-time').textContent = String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
-    const bar = $('#learn-bar');
-    if (!S.base) bar.firstElementChild.style.width = Math.min(100, (100 * S.tick) / LEARN_TICKS) + '%';
-    else if (!bar.hidden) {
-      bar.hidden = true; $('#learn-text').textContent = 'Normal range learned. The device is watching for departures from it.';
-      document.querySelectorAll('#faults button').forEach((b) => { b.disabled = false; });
-      if (params.get('fault') && FAULTS[params.get('fault')]) setFault(params.get('fault'));
+  // ---- live loop -----------------------------------------------------------
+  async function poll() {
+    if (!ME) return;
+    let s; try { s = await api('api/state?since=' + seq); } catch (e) { return; }
+    state = s; seq = s.seq;
+    s.ticks.forEach((t) => ticks.push({ v: t.v, a: t.a })); while (ticks.length > HIST) ticks.shift();
+    if (!ticks.length) return;
+    const v = ticks[ticks.length - 1].v, m = s.machine;
+    const pill = $('#status'); pill.className = 'pill ' + m.status; pill.textContent = sevLabel[m.status];
+    $('#s-health').textContent = m.health; $('#s-rate').textContent = Math.round(v.rate); $('#s-def').textContent = v.defect.toFixed(1);
+    if (s.active && s.active.id !== lastIssueId) { lastIssueId = s.active.id; beep(); }
+    if (!$('#v-live').hidden) {
+      renderLine(v); renderCharts(v); renderActive(); renderInbox();
+      document.querySelectorAll('#faults [data-fault]').forEach((b) => b.setAttribute('aria-pressed', !!m.fault && b.dataset.fault === m.fault));
     }
   }
 
-  function step() {
-    S.tick++; S.t += DT;
-    simulate(); learnOrScore();
-    renderHeader(); renderLine(); renderCharts(); renderIncidents();
-    if (!S.vision.live) renderCamera();
+  // ---- other views ---------------------------------------------------------
+  const table = (heads, rows) => `<div class="scroll"><table><thead><tr>${heads.map((h) => `<th${h.startsWith('#') ? ' class="num"' : ''}>${h.replace(/^#/, '')}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${heads.length}" class="muted">Nothing recorded yet.</td></tr>`}</tbody></table></div>`;
+  const statusText = { detected: 'Open', acknowledged: 'Acknowledged', resolved: 'Resolved', verified: 'Verified' };
+
+  async function viewIssues() {
+    const list = await api('api/issues');
+    $('#v-issues').innerHTML = `<section class="panel"><div class="head"><h2>Issues</h2><a class="btn plain" href="api/issues.csv">Export CSV</a></div>
+      ${table(['No.', 'Detected', 'Issue', 'Severity', 'Status', '#Confidence', '#Downtime', '#Loss', '#Saved'], list.map((i) => `<tr class="click" data-href="#issue-${i.id}"><td>${i.id}</td><td>${stamp(i.detected_at)}</td><td>${esc(i.title)}</td>
+        <td><span class="sev ${i.severity}">${i.severity}</span></td><td>${statusText[i.status]}${i.resolved_by === 'system' ? ', cleared by itself' : ''}</td><td class="num">${Math.round(i.confidence * 100)} %</td>
+        <td class="num">${(i.downtime_h * 60).toFixed(0)} min</td><td class="num">${money(i.actual_loss)}</td><td class="num">${money(i.savings)}</td></tr>`))}</section>`;
+  }
+  document.addEventListener('click', (e) => { const r = e.target.closest('tr.click'); if (r) location.hash = r.dataset.href; });
+
+  async function viewIssue(id) {
+    const i = await api('api/issues/' + id), el = $('#v-issue'), ex = i.explanation;
+    let prev = i.detected_at;
+    const steps = i.steps.map((s) => { const d = s.at ? s.at - prev : null; if (s.at) prev = s.at; return `<li class="${s.at ? 'done' : ''}"><b>${s.name}</b><span>${s.at ? clock(s.at) : 'not yet'}</span><span class="muted">${s.at && s.name !== 'Detected' ? 'after ' + mins(d) : ''}</span></li>`; }).join('');
+    const keys = [...new Set([...(ex.contributions || []).map((c) => c.key), 'rate', 'defect'])].slice(0, 6);
+    el.innerHTML = `<section class="panel"><div class="head"><h2>Issue ${i.id}: ${esc(i.title)}</h2><span class="row"><span class="sev ${i.severity}">${i.severity}</span><span class="sev none">${i.is_simulated ? 'SIMULATED RUN' : statusText[i.status]}</span></span></div>
+        <span class="small muted">${esc(i.label)} (${esc(i.category)}), model version ${i.model_version_id}, detected ${stamp(i.detected_at)}</span>
+        <ol class="steps">${steps}</ol>
+        <dl class="kv"><div><dt>Model confidence</dt><dd>${Math.round(i.confidence * 100)} %</dd></div><div><dt>Chance of failure if ignored</dt><dd>${Math.round(i.fail_prob * 100)} %</dd></div>
+          <div><dt>Time to failure at detection</dt><dd>${i.rul_min === null ? 'n/a' : Math.round(i.rul_min) + ' min'}</dd></div>
+          <div><dt>Downtime</dt><dd>${(i.downtime_h * 60).toFixed(0)} min</dd></div><div><dt>Actual loss</dt><dd>${money(i.actual_loss)}</dd></div>
+          <div><dt>Projected loss if not fixed</dt><dd>${money(i.projected_loss)}</dd></div><div><dt>Saved by early detection</dt><dd>${money(i.savings)}</dd></div></dl>
+        ${i.status === 'resolved' && can('manager') ? `<div class="row"><button class="btn go" id="verify">Verify the repair</button></div>` : ''}<p class="err"></p></section>
+      <div class="half"><section class="panel"><h2>What was detected and why</h2><p>${esc(ex.summary)}</p>
+          <ul class="list">${(ex.contributions || []).map((c) => `<li>${esc(c.text)}</li>`).join('')}</ul>
+          <p class="small muted">Anomaly score ${ex.score} against a threshold of ${ex.threshold}. Largest deviation ${ex.max_deviation} standard deviations. Pattern match with "${esc(i.label)}": ${Math.round((ex.type_similarity || 0) * 100)} %.</p>
+          <p><b>Recommended:</b> ${esc(i.recommended)}</p>${i.resolution ? `<p><b>Resolution:</b> ${esc(i.resolution)} (${esc(i.resolved_by)})</p>` : ''}</section>
+        <section class="panel"><h2>Actions</h2>${table(['Action', 'Risk', 'Status', 'Decided by'], i.actions.map((a) => `<tr><td>${esc(a.label)}<br><span class="muted small">${esc(a.reason)}</span></td><td>${a.risk}</td><td>${a.status.replace('_', ' ')}</td><td>${esc(a.decided_name || (a.status === 'done' ? 'automatic' : ''))}</td></tr>`))}
+          <h2>People alerted</h2>${table(['Person', 'Channel', 'Level', 'Sent', 'Status'], i.notifications.map((n) => `<tr><td>${esc(n.name)}</td><td>${n.channel.replace('_', '-')}</td><td>${n.level}</td><td>${clock(n.sent_at)}</td><td>${n.status.replace('_', ' ')}</td></tr>`))}</section></div>
+      <section class="panel"><div class="head"><h2>Readings before, during and after</h2><span class="small muted">Red = flagged by the model</span></div><div class="charts big">${keys.map((k) => `<div class="chart"><span class="lab">${SIG[k].label} (${SIG[k].unit})</span><canvas id="ic-${k}"></canvas></div>`).join('')}</div></section>
+      <section class="panel"><h2>Timeline</h2>${table(['Time', 'Who or what', 'What happened'], i.events.map((e) => `<tr><td>${clock(e.ts)}</td><td>${esc(e.actor)} <span class="muted">(${e.actor_type})</span></td><td>${esc(e.summary)}</td></tr>`))}</section>`;
+    const col = colours(), flags = i.readings.map((r) => r.a);
+    keys.forEach((k) => drawSeries($('#ic-' + k), i.readings.map((r) => r.v[k]), flags, BASE[k], col));
+    const vb = $('#verify'); if (vb) vb.onclick = () => act(vb, `api/issues/${i.id}/verify`);
   }
 
-  buildLine(); buildCharts(); buildFaults();
-  step();
-  setInterval(step, TICK_MS);
-  setInterval(analyse, 200);
+  let histQuery = '';
+  async function viewHistory() {
+    const d = await api('api/history?' + histQuery), p = d.profile, el = $('#v-history'), q = new URLSearchParams(histQuery);
+    const types = ['issue_detected', 'notification', 'escalated', 'acknowledged', 'action_auto', 'approval_requested', 'action_approved', 'action_rejected', 'action_reverted', 'severity_raised', 'resolved', 'verified', 'machine_restarted', 'config_changed', 'demo_fault'];
+    el.innerHTML = `<section class="panel"><h2>Machine profile</h2><dl class="kv"><div><dt>Machine</dt><dd>${esc(p.name)}</dd></div><div><dt>Installed</dt><dd>${p.installed_at}</dd></div><div><dt>Runtime recorded</dt><dd>${p.runtime_h} h</dd></div>
+        <div><dt>Issues</dt><dd>${p.failures}</dd></div><div><dt>Mean time between issues</dt><dd>${p.mtbf_h === null ? 'n/a' : p.mtbf_h + ' h'}</dd></div><div><dt>Downtime</dt><dd>${p.downtime_h} h</dd></div><div><dt>Total loss</dt><dd>${money(p.total_loss)}</dd></div>
+        <div><dt>Most frequent</dt><dd style="font-size:.9rem">${esc(p.top_types.join(', ') || 'none yet')}</dd></div></dl></section>
+      <section class="panel"><div class="head"><h2>History</h2><a class="btn plain" href="api/history.csv?${esc(histQuery)}">Export CSV</a></div>
+        <form class="filters" id="hf"><label>Event type<select name="type"><option value="">All</option>${types.map((t) => `<option ${q.get('type') === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+          <label>Done by<select name="actor"><option value="">Anyone</option>${['user', 'model', 'rule', 'system'].map((t) => `<option ${q.get('actor') === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+          <label>Issue no.<input name="issue" inputmode="numeric" size="5" value="${esc(q.get('issue') || '')}"></label><label>Search<input name="q" value="${esc(q.get('q') || '')}"></label><button class="btn">Filter</button></form>
+        ${table(['Time', 'Type', 'Who or what', 'What happened', 'Issue'], d.events.map((e) => `<tr><td>${stamp(e.ts)}</td><td>${e.type.replace(/_/g, ' ')}</td><td>${esc(e.actor)} <span class="muted">(${e.actor_type})</span></td><td>${esc(e.summary)}</td><td>${e.issue_id ? `<a href="#issue-${e.issue_id}">${e.issue_id}</a>` : ''}</td></tr>`))}
+        <p class="note">Records are append-only: the database rejects edits and deletions. Newest first, up to 300 rows.</p></section>`;
+    $('#hf').onsubmit = (e) => { e.preventDefault(); histQuery = new URLSearchParams([...new FormData(e.target)].filter(([, v]) => v)).toString(); viewHistory(); };
+  }
+
+  async function viewSummary() {
+    const s = await api('api/summary');
+    $('#v-summary').innerHTML = `<section class="panel"><div class="head"><h2>Summary, ${s.period}</h2><span class="row noprint"><a class="btn plain" href="api/issues.csv">Export CSV</a><button class="btn plain" onclick="window.print()">Print or save as PDF</button></span></div>
+        <dl class="kv big"><div><dt>Line health now</dt><dd>${s.health} / 100</dd></div><div><dt>Active issues</dt><dd>${s.active}</dd></div><div><dt>Issues detected</dt><dd>${s.issues}</dd></div>
+          <div><dt>Fixed by people</dt><dd>${s.resolved_by_people}</dd></div><div><dt>Cleared by themselves</dt><dd>${s.cleared_by_itself}</dd></div>
+          <div><dt>Automatic actions</dt><dd>${s.actions_auto}</dd></div><div><dt>Approved by a manager</dt><dd>${s.actions_approved}</dd></div>
+          <div><dt>Average time to acknowledge</dt><dd>${mins(s.avg_ack_ms)}</dd></div><div><dt>Average time to fix</dt><dd>${mins(s.avg_fix_ms)}</dd></div><div><dt>Escalations</dt><dd>${s.escalations}</dd></div>
+          <div><dt>Losses</dt><dd>${money(s.loss)}</dd></div><div><dt>Saved by early detection</dt><dd>${money(s.savings)}</dd></div></dl></section>
+      <section class="panel"><h2>What stands out</h2><ul class="list" style="font-size:1rem;gap:8px">${s.insights.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
+        <p class="note">Times use the demo clock. Money figures come from placeholder cost settings.</p></section>`;
+  }
+
+  async function viewMoney() {
+    const f = await api('api/finance'), c = f.costs;
+    const fields = [['production_value_h', 'Production value per hour'], ['idle_labour_h', 'Idle crew cost per hour'], ['repair_labour_h', 'Technician cost per hour'], ['scrap_kg', 'Scrap cost per kg'], ['energy_kwh', 'Energy price per kWh']];
+    $('#v-money').innerHTML = `<section class="panel"><h2>Losses and savings</h2>
+        <dl class="kv big"><div><dt>Actual losses</dt><dd>${money(f.totals.loss)}</dd></div><div><dt>Saved by early detection</dt><dd>${money(f.totals.savings)}</dd></div><div><dt>At risk in open issues</dt><dd>${money(f.totals.projected_open)}</dd></div>
+          <div><dt>Downtime</dt><dd>${(f.totals.downtime_h * 60).toFixed(0)} min</dd></div><div><dt>Return on the monitoring kit</dt><dd>${f.roi.ratio === null ? 'n/a' : f.roi.ratio + ' ×'}</dd></div></dl>
+        <p class="note">Return = savings ÷ an assumed kit cost of ${money(f.roi.module_cost)}. All cost inputs below are placeholders, not measured figures.</p></section>
+      <div class="half"><section class="panel"><h2>By issue type</h2>${table(['Issue type', 'Station', '#Count', '#Downtime', '#Loss', '#Saved'], f.byType.map((r) => `<tr><td>${esc(r.label)}</td><td>${esc((STATIONS.find((s) => s.id === r.component) || {}).name || "")}</td><td class="num">${r.n}</td><td class="num">${(r.downtime * 60).toFixed(0)} min</td><td class="num">${money(r.loss)}</td><td class="num">${money(r.savings)}</td></tr>`))}</section>
+        <section class="panel"><h2>By day</h2>${table(['Day', '#Issues', '#Loss', '#Saved'], f.byDay.map((r) => `<tr><td>${r.day}</td><td class="num">${r.n}</td><td class="num">${money(r.loss)}</td><td class="num">${money(r.savings)}</td></tr>`))}</section></div>
+      <section class="panel"><h2>What each failure would cost</h2>${table(['Issue type', '#Chance of failure if ignored', '#Cost if it fails', '#Cost if fixed early', '#Saving'], f.failureCosts.map((r) => `<tr><td>${esc(r.label)}</td><td class="num">${Math.round(r.fail_prob * 100)} %</td><td class="num">${money(r.failure_cost)}</td><td class="num">${money(r.preventive_cost)}</td><td class="num">${money(r.saving)}</td></tr>`))}</section>
+      <section class="panel"><h2>Cost settings</h2><form class="form" id="cf">${fields.map(([k, l]) => `<label>${l} (GEL)<input id="c-${k}" name="${k}" type="number" step="any" min="0" value="${c[k]}"></label>`).join('')}<div class="row" style="align-items:end"><button class="btn go">Save costs</button></div></form><p class="err"></p></section>`;
+    $('#cf').onsubmit = (e) => { e.preventDefault(); act(e.target.querySelector('button'), 'api/costs', Object.fromEntries(new FormData(e.target))); };
+  }
+
+  async function viewSetup() {
+    const s = await api('api/settings'), m = MODEL.metrics;
+    const sw = [['automation_enabled', 'Automation', 'When off, nothing runs by itself. Every action waits for a person.'], ['approval_stop_feed', 'Stopping the feed needs manager approval', ''], ['approval_safe_shutdown', 'Shutting the machine down needs manager approval', '']];
+    $('#v-setup').innerHTML = `<div class="half"><section class="panel"><h2>Automation and safety</h2>
+          ${sw.map(([k, l, h]) => `<div class="switch"><span><b>${l}</b>${h ? `<br><span class="small muted">${h}</span>` : ''}</span><button class="btn" data-key="${k}" data-on="${s.settings[k] ? 1 : 0}" aria-pressed="${s.settings[k]}">${s.settings[k] ? 'On' : 'Off'}</button></div>`).join('')}
+          <p class="note">There is no control link to the AP800. Machine commands go to a mock that records them and stops the simulated machine.</p><p class="err"></p></section>
+        <section class="panel"><h2>Who is called</h2>${table(['Level', 'Person', 'Role', 'Shift'], s.chain.map((r) => `<tr><td>${r.level}</td><td>${esc(r.name)}</td><td>${r.role}</td><td>${r.shift}</td></tr>`))}
+          <p class="note">Level 1 is alerted first, by whoever is on shift (day is 08:00 to 20:00). If nobody acknowledges within ${s.escalateAfterS} s the next level is alerted. Telegram messages are recorded but not sent: no bot token is configured.</p></section></div>
+      <section class="panel"><h2>Detection model</h2><dl class="kv"><div><dt>Version</dt><dd>${MODEL.version}</dd></div><div><dt>Trained</dt><dd style="font-size:.9rem">${stamp(Date.parse(MODEL.trained_at))}</dd></div><div><dt>Precision</dt><dd>${(m.precision * 100).toFixed(1)} %</dd></div><div><dt>Recall</dt><dd>${(m.recall * 100).toFixed(1)} %</dd></div><div><dt>False-positive rate</dt><dd>${(m.false_positive_rate * 100).toFixed(2)} %</dd></div><div><dt>Fault type named correctly</dt><dd>${(m.type_accuracy * 100).toFixed(1)} %</dd></div></dl>
+        <p class="note">Isolation Forest plus a deviation check, then a nearest-pattern classifier. Measured on ${m.test_samples} synthetic test samples from the simulator, not on a real machine. Forest alone: recall ${(m.forest_only.recall * 100).toFixed(1)} %. Retrain with <code>npm run train</code>.</p></section>
+      <section class="panel"><h2>Audit log</h2>${table(['Time', 'Person', 'Action', 'Detail'], s.audit.map((a) => `<tr><td>${stamp(a.ts)}</td><td>${esc(a.name || '')}</td><td>${a.action.replace(/_/g, ' ')}</td><td class="small">${esc(a.detail || '')}</td></tr>`))}</section>`;
+    $('#v-setup').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) act(b, 'api/settings', { key: b.dataset.key, value: b.dataset.on !== '1' }); };
+  }
+
+  // ---- routing -------------------------------------------------------------
+  const VIEWS = { live: null, issues: viewIssues, history: viewHistory, summary: viewSummary, money: viewMoney, setup: viewSetup };
+  function route(refreshOnly) {
+    if (!ME) return;
+    let h = location.hash.slice(1) || 'live', id = null;
+    const m = /^issue-(\d+)$/.exec(h); if (m) { h = 'issue'; id = m[1]; }
+    if (h !== 'issue' && !(h in VIEWS)) h = 'live';
+    if ((h === 'money' || h === 'setup') && !can('manager')) h = 'live';
+    if (refreshOnly === true && h === 'live') return;
+    document.querySelectorAll('#app main').forEach((el) => { el.hidden = el.id !== 'v-' + h; });
+    document.querySelectorAll('#tabs a').forEach((a) => { const on = a.getAttribute('href') === '#' + (h === 'issue' ? 'issues' : h); on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'); });
+    const fn = h === 'issue' ? () => viewIssue(id) : VIEWS[h];
+    if (fn) fn().catch((e) => { $('#v-' + h).innerHTML = `<section class="panel"><p class="err">${esc(e.message)}</p></section>`; });
+    if (h === 'live') activeSig = '';
+  }
+  window.addEventListener('hashchange', () => route());
+
+  async function start() {
+    let me; try { me = await api('api/me'); } catch (e) { return; }
+    ME = me.user; SIG = me.signals; BASE = me.baseline; ALERT_Z = me.alertZ; FAULTS = me.faults; MODEL = me.model;
+    $('#login').hidden = true; $('#app').hidden = false;
+    $('#s-user').textContent = ME.name.replace(/ \(.*/, '') + ', ' + ME.role;
+    document.querySelectorAll('#tabs a[data-role]').forEach((a) => { a.hidden = !can(a.dataset.role); });
+    seq = 0; ticks.length = 0; activeSig = '';
+    buildLine(); buildCharts(); buildFaults();
+    await poll(); route();
+  }
+
+  setInterval(poll, 1000);
+  setInterval(analyse, 250);
+  start();
 })();

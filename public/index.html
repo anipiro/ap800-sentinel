@@ -1,8 +1,7 @@
-<title>AP800 Sentinel Monitor</title>
-<meta name="claude:viewport-fit-sides" content="cover">
+<title>AP800 Sentinel</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-/* Layout: operator screen. Status bar on top, the line drawing and signals on the left, incidents and camera on the right. Stacks to one column on a phone. */
+/* Layout: operator screen. Status bar and tabs on top; each tab is one working view. Stacks to one column on a phone. */
 :root{
   --bg:#EDF0F3; --panel:#FFFFFF; --fg:#16202B; --muted:#55626E; --line:#C7CFD8;
   --accent:#1D5BB8; --accent-soft:#DCE8F8; --dough:#F3EAD0;
@@ -21,169 +20,207 @@
 
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45}
-.app{max-width:1440px;margin:0 auto;padding-block:20px 48px;
+.app{max-width:1440px;margin:0 auto;padding-block:18px 48px;
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
-  display:flex;flex-direction:column;gap:16px}
+  display:flex;flex-direction:column;gap:14px}
 h1,h2,h3{font-family:var(--display);margin:0;line-height:1.15;text-wrap:balance}
 h1{font-size:1.5rem;font-weight:700}
 h2{font-size:1.05rem;font-weight:700}
+h3{font-size:.98rem;font-weight:600}
 p{margin:0}
+a{color:var(--accent)}
 .muted{color:var(--muted)}
 .small{font-size:.84rem}
-button{font:inherit;color:inherit;cursor:pointer}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
-.bar{display:flex;flex-wrap:wrap;align-items:center;gap:14px 28px;padding-bottom:14px;border-bottom:2px solid var(--fg)}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px 24px}
 .brand{display:flex;flex-direction:column;gap:2px}
 .pill{display:inline-flex;align-items:center;gap:8px;font-family:var(--display);font-weight:600;font-size:1rem;padding:6px 14px;border-radius:99px;border:1.5px solid currentColor}
 .pill::before{content:"";width:10px;height:10px;border-radius:50%;background:currentColor}
-.pill.learn{color:var(--accent);background:var(--accent-soft)}
 .pill.ok{color:var(--ok);background:var(--ok-soft)}
-.pill.warn{color:var(--warn);background:var(--warn-soft)}
-.pill.crit{color:var(--crit);background:var(--crit-soft)}
-.stats{display:flex;flex-wrap:wrap;gap:6px 28px;margin:0 0 0 auto}
+.pill.medium,.pill.low{color:var(--warn);background:var(--warn-soft)}
+.pill.high,.pill.critical,.pill.stopped{color:var(--crit);background:var(--crit-soft)}
+.stats{display:flex;flex-wrap:wrap;gap:6px 24px;margin:0 0 0 auto;align-items:flex-end}
 .stats div{display:flex;flex-direction:column}
-.stats dt{font-size:.78rem;color:var(--muted)}
-.stats dd{margin:0;font-family:var(--display);font-weight:600;font-size:1.05rem;font-variant-numeric:tabular-nums}
+.stats dt,.kv dt{font-size:.78rem;color:var(--muted)}
+.stats dd,.kv dd{margin:0;font-family:var(--display);font-weight:600;font-size:1.05rem;font-variant-numeric:tabular-nums}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:2px solid var(--fg)}
+.tabs a{padding:8px 14px;text-decoration:none;color:var(--fg);font-family:var(--display);font-weight:600;border-radius:4px 4px 0 0}
+.tabs a[aria-current="page"]{background:var(--fg);color:var(--panel)}
+.tabs a:hover:not([aria-current="page"]){background:var(--accent-soft)}
+.note{font-size:.84rem;color:var(--muted)}
 
-.note{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:.86rem;color:var(--muted)}
-.progress{flex:1 1 160px;max-width:320px;height:6px;background:var(--line);border-radius:3px;overflow:hidden}
-.progress i{display:block;height:100%;width:0;background:var(--accent)}
-
-.grid{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:16px;align-items:start}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:14px;align-items:start}
 @media (max-width:1020px){.grid{grid-template-columns:minmax(0,1fr)}}
-.duo{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);gap:16px;align-items:start}
+.duo{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);gap:14px;align-items:start}
+.half{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;align-items:start}
 @media (max-width:760px){.duo{grid-template-columns:minmax(0,1fr)}}
-.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.panel.demo{border-style:dashed}
 .head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
 
-.linewrap{overflow-x:auto}
+.linewrap,.scroll{overflow-x:auto}
 .linewrap svg{display:block;width:100%;min-width:860px;height:auto;color:var(--fg);font-family:var(--body)}
 .st rect{fill:var(--ok-soft);stroke:var(--ok);stroke-width:1.5}
 .st.warn rect{fill:var(--warn-soft);stroke:var(--warn);stroke-width:2.5}
 .st.crit rect{fill:var(--crit-soft);stroke:var(--crit);stroke-width:2.5}
-.st.learn rect{fill:var(--bg);stroke:var(--line)}
+.st.off rect{fill:var(--bg);stroke:var(--line)}
 .st .nm{font-size:13.5px;font-weight:600;fill:var(--fg)}
 .st .hl{font-size:12px;font-weight:600;fill:var(--ok)}
-.st.warn .hl{fill:var(--warn)} .st.crit .hl{fill:var(--crit)} .st.learn .hl{fill:var(--muted)}
+.st.warn .hl{fill:var(--warn)} .st.crit .hl{fill:var(--crit)} .st.off .hl{fill:var(--muted)}
 .lv{font-size:12px;fill:var(--fg);font-variant-numeric:tabular-nums}
-.lv.off{fill:var(--crit);font-weight:600}
+.lv.bad{fill:var(--crit);font-weight:600}
 .wire{stroke:currentColor;stroke-width:1.4;fill:none}
 .dash{stroke:currentColor;stroke-width:1.2;fill:none;stroke-dasharray:5 4}
 .cap{font-size:12px;fill:var(--muted)}
 
 .charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .chart{border:1px solid var(--line);border-radius:4px;padding:8px 10px;display:flex;flex-direction:column;gap:2px;min-width:0}
-.chart.off{border-color:var(--crit);background:var(--crit-soft)}
+.chart.bad{border-color:var(--crit);background:var(--crit-soft)}
 .chart .lab{font-size:.78rem;color:var(--muted)}
 .chart .val{font-family:var(--display);font-weight:600;font-size:1.15rem;font-variant-numeric:tabular-nums}
 .chart .val small{font-family:var(--body);font-weight:400;font-size:.78rem;color:var(--muted)}
 .chart canvas{width:100%;height:54px;display:block}
+.charts.big .chart canvas{height:90px}
+.charts.big{grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
 
-.inc{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
-.inc > li{border:1px solid var(--line);border-left-width:5px;border-radius:4px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
-.inc > li.crit{border-left-color:var(--crit)} .inc > li.warn{border-left-color:var(--warn)}
-.inc > li.done{opacity:.62;border-left-color:var(--line)}
-.inc .top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.inc .sev{font-size:.76rem;font-weight:600;white-space:nowrap}
-.inc li.crit .sev{color:var(--crit)} .inc li.warn .sev{color:var(--warn)} .inc li.done .sev{color:var(--muted)}
-.inc h3{font-size:.98rem}
-.inc ul{margin:0;padding-left:1.1em;font-size:.86rem}
-.inc .ev{font-size:.84rem;font-variant-numeric:tabular-nums}
-.row{display:flex;flex-wrap:wrap;gap:8px}
-.btn{background:var(--panel);border:1px solid var(--fg);border-radius:4px;padding:5px 11px;font-size:.86rem;font-weight:500}
+.issue{border:1px solid var(--line);border-left:5px solid var(--line);border-radius:4px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.issue.critical,.issue.high{border-left-color:var(--crit)} .issue.medium,.issue.low{border-left-color:var(--warn)}
+.sev{font-size:.78rem;font-weight:600;white-space:nowrap;padding:1px 8px;border-radius:99px;border:1px solid currentColor}
+.sev.critical,.sev.high{color:var(--crit)} .sev.medium,.sev.low{color:var(--warn)} .sev.ok{color:var(--ok)} .sev.none{color:var(--muted)}
+.list{margin:0;padding-left:1.1em;font-size:.88rem;display:flex;flex-direction:column;gap:2px}
+.acts{display:flex;flex-direction:column;gap:6px}
+.act{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px 10px;font-size:.88rem;padding:6px 8px;background:var(--bg);border-radius:4px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{background:var(--panel);border:1px solid var(--fg);border-radius:4px;padding:5px 11px;font-size:.86rem;font-weight:500;text-decoration:none;color:var(--fg);display:inline-block}
 .btn:hover{background:var(--accent-soft)}
+.btn.go{background:var(--fg);color:var(--panel)}
 .btn[aria-pressed="true"]{background:var(--fg);color:var(--panel)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .btn.plain{border-color:var(--line)}
-.empty{font-size:.9rem;color:var(--muted);padding:6px 0}
+.empty{font-size:.9rem;color:var(--muted)}
+.err{color:var(--crit);font-size:.86rem;min-height:1.2em}
 
 .cam{position:relative;background:var(--fg);border-radius:4px;overflow:hidden;aspect-ratio:16/9;max-width:100%}
 .cam video,.cam canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .cam .veil{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;background:rgba(10,16,24,.72);color:#fff;font-weight:600}
-.kv{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px 16px;margin:0}
 .kv div{display:flex;flex-direction:column}
-.kv dt{font-size:.76rem;color:var(--muted)}
-.kv dd{margin:0;font-family:var(--display);font-weight:600;font-size:1.05rem;font-variant-numeric:tabular-nums}
-.demo{border-style:dashed}
+.kv.big{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.kv.big dd{font-size:1.5rem}
+
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+th,td{text-align:left;vertical-align:top;padding:7px 10px;border-bottom:1px solid var(--line)}
+th{font-family:var(--display);font-weight:600;font-size:.8rem;color:var(--muted);white-space:nowrap}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.click{cursor:pointer} tr.click:hover{background:var(--accent-soft)}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;list-style:none;margin:0;padding:0}
+.steps li{border-top:4px solid var(--line);padding-top:6px;display:flex;flex-direction:column;font-size:.84rem}
+.steps li.done{border-top-color:var(--ok)}
+.steps b{font-family:var(--display)}
+.filters{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+.filters label,.form label{display:flex;flex-direction:column;font-size:.78rem;color:var(--muted);gap:2px}
+input,select{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:5px 8px;font-size:.9rem;min-width:0}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.switch{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
 code{font-size:.84rem;background:var(--bg);padding:1px 5px;border-radius:3px;overflow-wrap:anywhere}
+
+.login{max-width:520px;margin:8vh auto 0;display:flex;flex-direction:column;gap:16px}
+.people{display:flex;flex-direction:column;gap:8px}
+.people button{display:flex;justify-content:space-between;gap:12px;text-align:left;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:6px;font-weight:500}
+.people button:hover{border-color:var(--fg)}
+@media print{.tabs,.bar .row,.noprint{display:none!important} body{background:#fff} .panel{border:0;padding:0}}
 </style>
 
-<div class="app">
+<div class="app" id="login" hidden>
+  <div class="login">
+    <div class="brand"><h1>AP800 Sentinel</h1><span class="muted">Fault detection for the Signal-Pack AP800 dumpling line</span></div>
+    <p>Choose who you are. Each role sees and can do different things.</p>
+    <div class="people" id="people"></div>
+    <p class="note">Demo sign-in: no password. Machine signals are simulated; people, costs and the control link are placeholders.</p>
+  </div>
+</div>
+
+<div class="app" id="app" hidden>
   <header class="bar">
     <div class="brand">
       <h1>AP800 Sentinel</h1>
       <span class="small muted">Dumpling line 1, Signal-Pack AP800</span>
     </div>
-    <span id="status" class="pill learn" role="status">Learning normal running</span>
+    <span id="status" class="pill ok" role="status">Running normally</span>
     <dl class="stats">
-      <div><dt>Recipe</dt><dd>V18Ts2, 0.8 mm</dd></div>
+      <div><dt>Health</dt><dd id="s-health">100</dd></div>
       <div><dt>Output</dt><dd><span id="s-rate">0</span> / 495 kg/h</dd></div>
       <div><dt>Defects</dt><dd><span id="s-def">0.0</span> %</dd></div>
-      <div><dt>Session</dt><dd id="s-time">00:00</dd></div>
+      <div><dt>Signed in</dt><dd id="s-user"></dd></div>
     </dl>
+    <div class="row"><button class="btn plain" id="mute" aria-pressed="false">Mute alarm</button><button class="btn plain" id="logout">Switch person</button></div>
   </header>
+  <nav class="tabs" id="tabs" aria-label="Views">
+    <a href="#live">Live</a><a href="#issues">Issues</a><a href="#history">History</a><a href="#summary">Summary</a><a href="#money" data-role="manager">Losses</a><a href="#setup" data-role="manager">Setup</a>
+  </nav>
+  <p class="note">Machine signals are simulated and run on a demo clock: one second here counts as one minute of production. Camera analysis runs on real footage of the machine.</p>
 
-  <div class="note">
-    <span id="learn-text">Recording the healthy machine to learn its normal range.</span>
-    <span class="progress" id="learn-bar"><i></i></span>
-    <span>Machine signals on this screen are simulated. The camera analysis runs on real footage of the machine.</span>
-  </div>
-
-  <main class="grid">
+  <!-- LIVE -->
+  <main class="grid" id="v-live">
     <div class="col">
       <section class="panel">
         <div class="head"><h2>Line view</h2><span class="small muted">Each station shows its live readings and health</span></div>
         <div class="linewrap" id="line"></div>
       </section>
       <div class="duo">
-      <section class="panel">
-        <div class="head"><h2>Signals</h2><span class="small muted">The shaded band is the learned normal range</span></div>
-        <div class="charts" id="charts"></div>
-      </section>
-      <section class="panel">
-        <div class="head"><h2>Exit belt camera</h2><span class="small muted">Recorded footage, analysed live</span></div>
-        <div class="cam">
-          <video id="vid" src="media/belt.mp4" muted loop autoplay playsinline></video>
-          <canvas id="ov" width="640" height="360"></canvas>
-          <div class="veil" id="veil" hidden></div>
-        </div>
-        <dl class="kv">
-          <div><dt>Products in view</dt><dd id="v-count">0</dd></div>
-          <div><dt>Flagged</dt><dd id="v-bad">0</dd></div>
-          <div><dt>Belt movement</dt><dd id="v-move">0</dd></div>
-        </dl>
-      </section>
+        <section class="panel">
+          <div class="head"><h2>Signals</h2><span class="small muted">Band = learned normal range, red = flagged by the model</span></div>
+          <div class="charts" id="charts"></div>
+        </section>
+        <section class="panel">
+          <div class="head"><h2>Exit belt camera</h2><span class="small muted">Recorded footage, analysed live</span></div>
+          <div class="cam">
+            <video id="vid" src="media/belt.mp4" muted loop autoplay playsinline></video>
+            <canvas id="ov" width="640" height="360"></canvas>
+            <div class="veil" id="veil" hidden></div>
+          </div>
+          <dl class="kv">
+            <div><dt>Products in view</dt><dd id="v-count">0</dd></div>
+            <div><dt>Flagged</dt><dd id="v-bad">0</dd></div>
+          </dl>
+        </section>
       </div>
     </div>
-
     <div class="col">
       <section class="panel">
-        <div class="head"><h2>Incidents</h2><button class="btn plain" id="mute" aria-pressed="false">Mute alarm</button></div>
-        <ul class="inc" id="incidents"></ul>
-        <p class="empty" id="inc-empty">No incidents. When the device detects a fault it appears here with the likely cause and what to check.</p>
+        <div class="head"><h2>Active issue</h2><span class="small muted" id="auto-state"></span></div>
+        <div id="active"></div>
       </section>
-
-      
-
+      <section class="panel" id="inbox-panel" hidden>
+        <div class="head"><h2>Your alerts</h2></div>
+        <div id="inbox" class="acts"></div>
+      </section>
       <section class="panel demo">
-        <div class="head"><h2>Test a fault</h2><span class="small muted">Demo control</span></div>
-        <p class="small muted">Pick a fault to play it into the simulated machine and watch the device find it.</p>
+        <div class="head"><h2>Test a fault</h2><span class="small muted">Demo control, shared by everyone</span></div>
+        <p class="small muted">Play a fault into the simulated machine and watch the model find it.</p>
         <div class="row" id="faults"></div>
       </section>
-
       <section class="panel">
         <div class="head"><h2>Phone sensor</h2><span class="small" id="dev-state">Not connected</span></div>
-        <p class="small muted" id="dev-help">A phone strapped to a gearbox works as a real vibration sensor. Start the local server, then open <code>/device.html</code> on the phone.</p>
+        <p class="small muted" id="dev-help">Open <a href="device.html" target="_blank">the phone sensor page</a> on a phone and fix it to something that vibrates. Its readings appear here.</p>
         <div class="chart" id="dev-chart" hidden>
           <span class="lab">Vibration, phone accelerometer</span>
           <span class="val"><span id="dev-val">0.00</span> <small>m/s²</small></span>
           <canvas id="dev-cv"></canvas>
         </div>
-        <div class="row"><button class="btn plain" id="dev-relearn" hidden>Learn normal again</button></div>
       </section>
     </div>
   </main>
+
+  <main class="col" id="v-issues" hidden></main>
+  <main class="col" id="v-issue" hidden></main>
+  <main class="col" id="v-history" hidden></main>
+  <main class="col" id="v-summary" hidden></main>
+  <main class="col" id="v-money" hidden></main>
+  <main class="col" id="v-setup" hidden></main>
 </div>
 <script src="app.js"></script>

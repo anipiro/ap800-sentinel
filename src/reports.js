@@ -65,7 +65,7 @@ function summary(db, health) {
   const resp = g('SELECT AVG(acked_at - detected_at) ack, AVG(resolved_at - detected_at) fix FROM issues WHERE detected_at >= ?', since);
   const esc = g("SELECT COUNT(*) n FROM events WHERE type = 'escalated' AND ts >= ?", since).n;
   const cur = g('SELECT currency FROM cost_params WHERE machine_id = 1').currency;
-  const insights = db.prepare('SELECT type, COUNT(*) n, SUM(actual_loss) loss FROM issues WHERE detected_at >= ? GROUP BY type ORDER BY loss DESC', since).all()
+  const insights = db.prepare('SELECT type, COUNT(*) n, SUM(actual_loss) loss FROM issues WHERE detected_at >= ? GROUP BY type ORDER BY loss DESC').all(since)
     .map((r) => `${typeOf(r.type).label} happened ${r.n} time${r.n === 1 ? '' : 's'} in the last 24 hours; estimated loss ${Math.round(r.loss).toLocaleString('en')} ${cur}; recommended: ${typeOf(r.type).action.replace(/\.$/, '').toLowerCase()}.`);
   if (esc) insights.push(`${esc} alert${esc === 1 ? ' was' : 's were'} escalated because nobody acknowledged in time. Check who is on duty for this machine.`);
   if (!insights.length) insights.push('No issues in the last 24 hours.');
