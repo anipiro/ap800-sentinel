@@ -12,7 +12,7 @@ The demo sleeps after about 15 minutes without visitors, so the first visit can 
 
 - **Watches the line.** Fifteen machine signals are checked twice a second by a hand-written Isolation Forest. The signals are simulated; the camera view analyses real footage of the machine.
 - **Names the fault and explains it.** Eight trained faults are classified, with the readings behind the diagnosis, the time left before failure and the money lost so far.
-- **Gets the right person.** Alerts go to the operator, then the technician, then the manager if nobody acknowledges within 20 seconds.
+- **Gets the right person.** Alerts go to the person on duty and escalate to the next person if nobody acknowledges within 20 seconds.
 - **Acts with guardrails.** Low-risk actions run on their own. Stopping the machine waits for a manager's approval, and every step is kept in an append-only history.
 - **Admits what it does not know.** Suspect sensors, single-sensor diagnoses and unfamiliar patterns are shown as such instead of being forced into a named fault.
 - **Covers the rest of the job.** Work orders, a what-if simulator, risk projection, key figures (OEE, MTBF, MTTR), reports and a Georgian or English interface.
