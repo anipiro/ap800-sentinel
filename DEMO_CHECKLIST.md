@@ -1,6 +1,6 @@
 # Demo checklist: AP800 Sentinel
 
-Public address: https://picnic-susan-example-dealers.trycloudflare.com
+Public address: https://threatened-lyric-compile-currency.trycloudflare.com (changes whenever the tunnel restarts)
 Local address (always works on this laptop): http://localhost:4800
 
 All commands are for PowerShell. Open two PowerShell windows before the demo: one for the server, one for the tunnel.

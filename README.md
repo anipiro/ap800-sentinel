@@ -2,6 +2,10 @@
 
 Fault detection and monitoring for the Signal-Pack AP800 dumpling machine. Hackathon build.
 
+**Live demo:** https://threatened-lyric-compile-currency.trycloudflare.com
+
+The demo runs from a laptop through a temporary tunnel. The link works only while that laptop and tunnel are running, and it changes each time the tunnel restarts. If it shows a Cloudflare error, run the project locally as described below.
+
 ## Run
 
 ```
