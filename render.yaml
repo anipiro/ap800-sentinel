@@ -1,0 +1,13 @@
+# Render blueprint: one free web service running the dashboard, the simulated machine and the detection engine.
+# The disk is not kept between restarts, so the database starts clean and the model retrains on each start.
+services:
+  - type: web
+    name: ap800-sentinel
+    runtime: node
+    plan: free
+    buildCommand: node -v
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 25.2.1
