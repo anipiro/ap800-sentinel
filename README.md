@@ -2,9 +2,9 @@
 
 Fault detection and monitoring for the Signal-Pack AP800 dumpling machine. Hackathon build.
 
-**Live demo:** https://threatened-lyric-compile-currency.trycloudflare.com
+**Live demo:** https://ap800-sentinel.onrender.com
 
-The demo runs from a laptop through a temporary tunnel. The link works only while that laptop and tunnel are running, and it changes each time the tunnel restarts. If it shows a Cloudflare error, run the project locally as described below.
+Hosted on Render's free plan. It sleeps after about 15 minutes without visitors, so the first visit can take up to a minute. Each wake starts with a clean database.
 
 ## Run
 
