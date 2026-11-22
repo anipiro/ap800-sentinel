@@ -1,10 +1,34 @@
 # AP800 Sentinel
 
-Fault detection and monitoring for the Signal-Pack AP800 dumpling machine. Hackathon build.
+Fault detection and monitoring for a Signal-Pack AP800 dumpling machine, built in one day at a hackathon.
 
 **Live demo:** https://ap800-sentinel.onrender.com
 
-Hosted on Render's free plan. It sleeps after about 15 minutes without visitors, so the first visit can take up to a minute. Each wake starts with a clean database.
+The demo sleeps after about 15 minutes without visitors, so the first visit can take up to a minute. Each wake starts with a clean database.
+
+![Live view](demo-backup/17-live-english.png)
+
+## What it does
+
+- **Watches the line.** Fifteen machine signals are checked twice a second by a hand-written Isolation Forest. The signals are simulated; the camera view analyses real footage of the machine.
+- **Names the fault and explains it.** Eight trained faults are classified, with the readings behind the diagnosis, the time left before failure and the money lost so far.
+- **Gets the right person.** Alerts go to the operator, then the technician, then the manager if nobody acknowledges within 20 seconds.
+- **Acts with guardrails.** Low-risk actions run on their own. Stopping the machine waits for a manager's approval, and every step is kept in an append-only history.
+- **Admits what it does not know.** Suspect sensors, single-sensor diagnoses and unfamiliar patterns are shown as such instead of being forced into a named fault.
+- **Covers the rest of the job.** Work orders, a what-if simulator, risk projection, key figures (OEE, MTBF, MTTR), reports and a Georgian or English interface.
+
+![Issue page, in Georgian](demo-backup/06-issue-page-summary-first.png)
+
+## How it is built
+
+| Part | Technology |
+|---|---|
+| Server | Node.js with no npm packages |
+| Database | SQLite through `node:sqlite` |
+| Detection | Isolation Forest and a nearest-centroid classifier, written from scratch |
+| Interface | Plain HTML, CSS and JavaScript, no build step |
+| Tests | `node:test`, 77 tests |
+| Hosting | Render |
 
 ## Run
 
@@ -92,7 +116,7 @@ Model metrics are measured on synthetic test data from the same simulator. They 
 - **My work tab**: a phone-width view of the active issue, the person's work orders and unassigned ones, plus a QR code that opens the machine's status page.
 - **Spare parts** (Work orders tab): stock per part, linked to issue types. An issue that needs a part at or below its minimum shows a reorder warning with the delivery time. The manager edits stock.
 - **Shift handover** (Summary tab): what happened this shift, what is open, and what the next shift should watch.
-- Not built: Georgian interface (draft material in `docs/i18n-draft`).
+- **Georgian interface**: the demo screens are in Georgian by default, with a ქართ/ENG button in the header. The strings are in `public/i18n/ka.json`; they were machine-translated and have not been checked by a native speaker. Other screens fall back to English.
 
 ## Platform features (Phase 4)
 
